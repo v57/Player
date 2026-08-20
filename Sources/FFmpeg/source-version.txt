@@ -1,0 +1,5 @@
+FFmpeg pinned revision : n7.1.5
+Commit                 : 3a0867c2bfda4a4d4309ca1a8cbdc6175e67f587
+Repository             : https://github.com/FFmpeg/FFmpeg.git
+Built by               : Tests/Scripts/build-ffmpeg-macos.sh
+Build date             : 2026-08-18 10:56:34 +0700

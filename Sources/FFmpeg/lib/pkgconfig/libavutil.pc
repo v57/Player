@@ -1,0 +1,14 @@
+prefix=/Users/v57/Projects/Player/ThirdParty/FFmpeg
+exec_prefix=${prefix}
+libdir=/Users/v57/Projects/Player/ThirdParty/FFmpeg/lib
+includedir=/Users/v57/Projects/Player/ThirdParty/FFmpeg/include
+
+Name: libavutil
+Description: FFmpeg utility library
+Version: 59.39.100
+Requires: 
+Requires.private: 
+Conflicts:
+Libs: -L${libdir}  -lavutil 
+Libs.private: -pthread -lm -framework CoreFoundation -framework CoreVideo -framework CoreMedia
+Cflags: -I${includedir}

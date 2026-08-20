@@ -1,0 +1,20 @@
+# macOS
+.DS_Store
+
+# Xcode
+build/
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+
+# Hermes / editor-local
+.hermes/
+.commandcode/
+
+# Large test media file — never commit or bundle this.
+video.mkv
+
+# Regenerable robustness corpus (Tests/Scripts/build-robustness-corpus.sh)
+Corpus/*.mkv
