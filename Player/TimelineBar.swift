@@ -51,11 +51,7 @@ struct TimelineBar: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 50, alignment: .leading)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 16)
         .padding(.bottom, 8)
     }
 }
