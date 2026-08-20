@@ -7,13 +7,13 @@ import Foundation
 /// App and injected alongside the player box, so both ContentView and the
 /// menu commands can drive it.
 ///
-/// Owns the controls auto-hide: while media plays, the controls overlay and
-/// the cursor hide after `idleHideDelay` of no pointer/keyboard activity in
-/// the window. Any interaction (hover, click, key) re-shows them. The idle
-/// timer runs from `NSEvent.addLocalMonitor` on the window — the only
-/// mechanism that fires regardless of which first responder consumed the
-/// event, and the same hook the fullscreen cursor hide needs (the cursor is
-/// hidden through a tracking area, which only covers the video view).
+/// Owns the controls auto-hide: while media plays, the controls overlay (and
+/// the cursor in fullscreen) hide after `idleHideDelay` of no pointer/
+/// keyboard activity in the window. Any interaction (hover, click, key)
+/// re-shows them. Both hides are driven from `NSEvent.addLocalMonitor` on
+/// the window — the only mechanism that fires regardless of which first
+/// responder consumed the event. The cursor is hidden with
+/// NSCursor.setHiddenUntilMouseMoves (re-shows on the next mouse movement).
 @MainActor
 final class PlayerUIState: ObservableObject {
     /// Drives the file importer sheet; also triggered by File > Open….
@@ -28,8 +28,8 @@ final class PlayerUIState: ObservableObject {
     /// no file), so the controls can never get stuck off-screen.
     @Published var controlsHidden = false
 
-    /// True while the fullscreen idle timer has hidden the cursor (a tracking
-    /// area in NativeVideoView drives this — it only covers the video view).
+    /// True while the fullscreen idle timer has hidden the cursor (via
+    /// NSCursor.setHiddenUntilMouseMoves; re-shows on the next mouse move).
     @Published var cursorHidden = false
 
     /// How long (s) with no pointer/keyboard activity before the controls
@@ -187,6 +187,7 @@ final class PlayerUIState: ObservableObject {
 
     func showControls() {
         controlsHidden = false
+        setCursorHidden(false)
     }
 
     private func restartIdleTimer() {
@@ -205,6 +206,21 @@ final class PlayerUIState: ObservableObject {
         guard !controlsHidden else { return }
         guard player?.isPlaying == true else { return }
         controlsHidden = true
-        cursorHidden = true
+        // Cursor hides in fullscreen only; windowed mode keeps the pointer
+        // available while the overlay is hidden.
+        if isFullScreen {
+            setCursorHidden(true)
+        }
+    }
+
+    /// Applies the cursor hidden state. The old tracking-area hook in the
+    /// video view never fires (the library view has no tracking area), so
+    /// the cursor stayed visible after the overlay hid — this is the actual
+    /// hide. setHiddenUntilMouseMoves re-shows the cursor on the next mouse
+    /// movement; showControls forces it back on any interaction.
+    private func setCursorHidden(_ hidden: Bool) {
+        guard cursorHidden != hidden else { return }
+        cursorHidden = hidden
+        NSCursor.setHiddenUntilMouseMoves(hidden)
     }
 }

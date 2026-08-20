@@ -68,12 +68,11 @@ struct ContentView: View {
     }
 
     /// The native engine's video surface: a Metal sink the player pushes
-    /// decoded frames into.
+    /// decoded frames into. Cursor auto-hide in fullscreen is owned by
+    /// PlayerUIState (NSCursor.setHiddenUntilMouseMoves from the window
+    /// event monitor) — the view itself does no cursor management.
     private var videoSurface: some View {
-        // The Metal view drives the cursor auto-hide through a tracking area
-        // (which only covers the video view); the controls overlay hide is
-        // driven by the window event monitor in PlayerUIState.
-        MediaPlayerView(player: player, onIdleHideChanged: { uiState.cursorHidden = $0 })
+        MediaPlayerView(player: player)
     }
 
     private var emptyState: some View {

@@ -13,16 +13,13 @@ import CoreGraphics
 /// register the sink — mirroring the old app-side NativeVideoView.
 public struct MediaPlayerView: NSViewRepresentable {
     @ObservedObject public var player: MediaPlayerBox
-    public var onIdleHideChanged: ((Bool) -> Void)?
 
-    public init(player: MediaPlayerBox, onIdleHideChanged: ((Bool) -> Void)? = nil) {
+    public init(player: MediaPlayerBox) {
         self.player = player
-        self.onIdleHideChanged = onIdleHideChanged
     }
 
     public func makeNSView(context: Context) -> MediaMetalView {
         let view = MediaMetalView(frame: .zero)
-        view.onIdleHideChanged = onIdleHideChanged
         view.player = player
         if let engine = player.engine as? NativeMediaPlayer {
             engine.registerSink(view)
@@ -51,7 +48,6 @@ public final class MediaMetalView: NSView, VideoFrameSink {
     private let subtitleLayer = CATextLayer()
     /// The boxed player (set by the SwiftUI wrapper) for key/click transport.
     weak var player: MediaPlayerBox?
-    var onIdleHideChanged: ((Bool) -> Void)?
     // TEMP DIAGNOSTICS
     private var diagFirstPresent = false
     private var diagRendererNil = 0
