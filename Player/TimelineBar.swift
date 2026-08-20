@@ -41,7 +41,7 @@ struct TimelineBar: View {
                     player.seek(to: scrubValue, exact: true)
                     isScrubbing = false
                 }
-            }
+            }.tint(.red.opacity(0.5))
             .disabled(player.duration <= 0)
             .accessibilityLabel("Timeline")
 
