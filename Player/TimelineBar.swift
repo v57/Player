@@ -50,7 +50,7 @@ struct TimelineBar: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(width: 50, alignment: .leading)
-        }
+        }.colorScheme(.dark)
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
     }
