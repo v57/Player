@@ -14,10 +14,9 @@ struct ContentView: View {
             if player.fileName == nil {
                 emptyState
             }
+        }.overlay(alignment: .bottom) {
             if player.fileName != nil, uiState.controlsVisible {
-                TimelineBar(player: player)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+              TimelineBar(player: player).transition(.blurReplace)
             }
         }
         .onHover { uiState.hovering = $0 }
