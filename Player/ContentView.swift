@@ -79,30 +79,25 @@ struct ContentView: View {
         return VStack(spacing: 16) {
             GeometryReader { view in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 16) {
                         ForEach(recent) { record in
                             Button {
                                 openRecent(record)
                             } label: {
-                                HStack(spacing: 10) {
-                                    Image(systemName: "film")
-                                        .foregroundStyle(.secondary)
-                                    VStack(alignment: .leading) {
-                                        Text(URL(fileURLWithPath: record.filePath).lastPathComponent)
-                                            .truncationMode(.middle)
-                                        let duration: Range<Date> = Date(timeIntervalSince1970: 0)..<Date(timeIntervalSince1970: record.duration)
-                                        HStack(spacing: 16) {
-                                            Text(duration, format: .timeDuration)
-                                            Text(record.lastPlayedAt, format: .relative(presentation: .named))
-                                        }.foregroundStyle(.secondary).font(.caption)
-                                    }.lineLimit(1)
+                                VStack(alignment: .leading) {
+                                    Text(URL(fileURLWithPath: record.filePath).lastPathComponent)
+                                        .truncationMode(.middle)
+                                    let duration: Range<Date> = Date(timeIntervalSince1970: 0)..<Date(timeIntervalSince1970: record.duration)
+                                    HStack {
+                                        Text(duration, format: .timeDuration)
+                                            .frame(minWidth: 48, alignment: .leading)
+                                        Text(record.lastPlayedAt, format: .relative(presentation: .named))
+                                    }.foregroundStyle(.secondary).font(.caption)
                                 }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 7)
-                                .contentShape(Rectangle())
                             }.buttonStyle(.plain)
                         }
-                    }.frame(minWidth: 400).frame(maxWidth: .infinity).frame(minHeight: view.size.height)
+                    }.lineLimit(1).padding(.horizontal, 16)
+                        .frame(minWidth: 400, maxWidth: .infinity, minHeight: view.size.height)
                 }
             }.safeAreaInset(edge: .bottom) {
                 Button("Open", systemImage: "folder.fill") {
