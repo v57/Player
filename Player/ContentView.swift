@@ -7,7 +7,7 @@ import MediaPlayer
 struct ContentView: View {
     @EnvironmentObject private var player: MediaPlayerBox
     @EnvironmentObject private var uiState: PlayerUIState
-
+    
     var body: some View {
         ZStack {
             videoSurface
@@ -16,7 +16,7 @@ struct ContentView: View {
             }
         }.overlay(alignment: .bottom) {
             if player.fileName != nil, uiState.controlsVisible {
-              TimelineBar(player: player).transition(.blurReplace)
+                TimelineBar(player: player).transition(.blurReplace)
             }
         }
         .onHover { uiState.hovering = $0 }
@@ -65,7 +65,7 @@ struct ContentView: View {
             Text(player.errorMessage ?? "")
         }
     }
-
+    
     /// The native engine's video surface: a Metal sink the player pushes
     /// decoded frames into. Cursor auto-hide in fullscreen is owned by
     /// PlayerUIState (NSCursor.setHiddenUntilMouseMoves from the window
@@ -73,21 +73,13 @@ struct ContentView: View {
     private var videoSurface: some View {
         MediaPlayerView(player: player)
     }
-
+    
     private var emptyState: some View {
         let recent = recentVideos
         return VStack(spacing: 16) {
-            Image(systemName: "play.rectangle")
-                .font(.system(size: 56))
-                .foregroundStyle(.secondary)
-            if recent.isEmpty {
-                Text("No video open")
-                    .font(.title2)
-            } else {
-                Text("Recent")
-                    .font(.title3.weight(.semibold))
+            GeometryReader { view in
                 ScrollView {
-                    VStack(spacing: 4) {
+                    VStack(alignment: .leading, spacing: 4) {
                         ForEach(recent) { record in
                             Button {
                                 openRecent(record)
@@ -95,28 +87,32 @@ struct ContentView: View {
                                 HStack(spacing: 10) {
                                     Image(systemName: "film")
                                         .foregroundStyle(.secondary)
-                                    Text(URL(fileURLWithPath: record.filePath).lastPathComponent)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                    Spacer(minLength: 0)
+                                    VStack(alignment: .leading) {
+                                        Text(URL(fileURLWithPath: record.filePath).lastPathComponent)
+                                            .truncationMode(.middle)
+                                        let duration: Range<Date> = Date(timeIntervalSince1970: 0)..<Date(timeIntervalSince1970: record.duration)
+                                        HStack(spacing: 16) {
+                                            Text(duration, format: .timeDuration)
+                                            Text(record.lastPlayedAt, format: .relative(presentation: .named))
+                                        }.foregroundStyle(.secondary).font(.caption)
+                                    }.lineLimit(1)
                                 }
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 7)
                                 .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
+                            }.buttonStyle(.plain)
                         }
-                    }
+                    }.frame(minWidth: 400).frame(maxWidth: .infinity).frame(minHeight: view.size.height)
                 }
-                .frame(maxWidth: 400, maxHeight: 240)
-            }
-            Button("Open a video…") {
-                uiState.showFileImporter = true
+            }.safeAreaInset(edge: .bottom) {
+                Button("Open", systemImage: "folder.fill") {
+                    uiState.showFileImporter = true
+                }.padding(.bottom)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-
+    
     /// The 5 most recently played files that still exist on disk, newest
     /// first. Re-fetched on each render, so the list reflects the latest
     /// additions the moment the empty state appears.
@@ -124,7 +120,7 @@ struct ContentView: View {
         PlaybackStore.shared.recentVideos(limit: 5)
             .filter { FileManager.default.fileExists(atPath: $0.filePath) }
     }
-
+    
     private func openRecent(_ record: PlaybackRecord) {
         // Prefer the persisted security-scoped bookmark: the sandbox can't
         // read a bare path outside its container (e.g. ~/Downloads). If no
@@ -141,7 +137,7 @@ struct ContentView: View {
         }
         Task { try? await player.open(url) }
     }
-
+    
     private var errorBinding: Binding<Bool> {
         Binding(
             get: { player.errorMessage != nil },
