@@ -297,12 +297,24 @@ public final class NativeMediaPlayer: MediaPlayer {
     }
 
     /// Pulls current clock/metrics from the controller (pipeline-safe getters).
+    ///
+    /// Paused-CPU guard: @Published writes fire objectWillChange even when
+    /// the value is identical, and each one re-renders the SwiftUI tree
+    /// (TimelineBar, sliders, AttributeGraph diffing) — measured ~5-9% CPU
+    /// while PAUSED because the 5 Hz timer kept publishing the same frozen
+    /// position. Publish only actual changes; while paused nothing can
+    /// change except isPlaying (handled by state-change callbacks).
     private func refreshFromController() {
-        isPlaying = controller.isPlaying
-        updateDisplaySleepPrevention()
+        let nowPlaying = controller.isPlaying
+        if nowPlaying != isPlaying {
+            isPlaying = nowPlaying
+            updateDisplaySleepPrevention()
+        }
+        guard nowPlaying else { return }
         let clock = controller.currentClockSafe()
         if clock >= 0 {
-            position = duration > 0 ? min(clock, duration) : clock
+            let newPosition = duration > 0 ? min(clock, duration) : clock
+            if newPosition != position { position = newPosition }
         }
         autosavePosition()
     }

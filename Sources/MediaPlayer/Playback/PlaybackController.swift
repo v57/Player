@@ -192,6 +192,24 @@ public final class PlaybackController {
     /// Media time at pause, so the monotonic clock continues across resume.
     private var pausedClock: Double = 0
 
+    /// Cached player-node clock. `AVAudioPlayerNode.playerTime(forNodeTime:)`
+    /// allocates a fresh ObjC AVAudioTime (plus node-time object) on EVERY
+    /// call, and `lastRenderTime` allocates too; reading them per demux tick
+    /// leaked ~150k AVAudioTime objects in 30 s of playback. The cache is
+    /// refreshed AT MOST ONCE PER LOOP ITERATION (the loop start marks it
+    /// dirty; the first read of the iteration pays one allocation, all
+    /// further reads in that iteration reuse it) and additionally
+    /// invalidated by every event that moves or restarts the node clock.
+    /// Guarded by a lock: the MainActor position timer reads it too.
+    private var cachedNodeSeconds: Double?
+    private var nodeClockDirty = true
+    private let nodeClockLock = NSLock()
+    private func invalidateNodeClock() {
+        nodeClockLock.lock()
+        nodeClockDirty = true
+        nodeClockLock.unlock()
+    }
+
     /// Published state (read from MainActor).
     private(set) var isPlaying = false
     private(set) var isPaused = false
@@ -437,7 +455,11 @@ public final class PlaybackController {
         let player = AVAudioPlayerNode()
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: format)
-        engine.mainMixerNode.outputVolume = 1.0
+        // Headless/muted testing: PLAYER_MUTE=1 silences the OUTPUT while the
+        // full decode->schedule->render pipeline (and the audio master clock)
+        // keeps running — the mute-autoplay pattern for automated runs.
+        engine.mainMixerNode.outputVolume =
+            ProcessInfo.processInfo.environment["PLAYER_MUTE"] == "1" ? 0 : 1.0
         audioEngine = engine
         audioPlayer = player
         audioIsRunning = false
@@ -456,6 +478,7 @@ public final class PlaybackController {
         }
         if let player = audioPlayer {
             player.play()
+            invalidateNodeClock()   // the node clock restarted at 0
             audioIsRunning = true
         }
     }
@@ -523,77 +546,106 @@ public final class PlaybackController {
 
         var eof = false
         while true {
-            if let cmd = takeCommand() {
-                switch cmd {
-                case .resume:
-                    isPlaying = true
-                    isPaused = false
-                    startMonotonic = CACurrentMediaTime() - pausedClock
-                    clockBaseAudio = audioPlayer != nil
-                    // The pause reset the node and DISCARDED its pre-buffered
-                    // audio; meanwhile the demux read cursor had already
-                    // advanced up to maxAudioAheadSeconds past the audio
-                    // position. Rewinding to the paused position re-reads that
-                    // block, so audio resumes EXACTLY at pausedClock (no
-                    // underrun gap / audio delay) instead of ~1.5s late.
-                    // discardAudioBefore drops the already-heard (< pausedClock)
-                    // prefix; video packets re-read are dropped by
-                    // lastPresentedPTS.
-                    if pausedClock > 0 {
-                        discardAudioBefore = pausedClock
-                        _ = try? demuxer.seek(to: max(0, pausedClock - 0.05))
-                    }
-                    restartAudioPlayer()
-                    NSLog("[Native] resume at %.3f", pausedClock)
-                    stateChanged()
-                case .pause:
-                    pausedClock = currentClock()
-                    NSLog("[Native] pause at %.3f", pausedClock)
-                    isPlaying = false
-                    isPaused = true
-                    if let player = audioPlayer {
-                        // Reset the node clock so resume is exact: the engine
-                        // keeps rendering a paused node, so playerTime would
-                        // otherwise keep advancing during pause. (The pre-
-                        // buffered audio is discarded here; .resume rewinds the
-                        // read cursor to pausedClock so no audio is lost.)
-                        player.stop()
-                        player.reset()
-                        audioClockOffset = pausedClock
-                    }
-                    audioFramesScheduled = 0
-                    audioIsRunning = false
-                    stateChanged()
-                case .seek(let seconds):
-                    performSeek(seconds: seconds, demuxer: demuxer)
-                case .switchAudio(let streamIndex):
-                    performAudioSwitch(streamIndex: streamIndex, demuxer: demuxer)
-                case .switchSubtitle(let streamIndex):
-                    performSubtitleSwitch(streamIndex: streamIndex, demuxer: demuxer)
-                case .stop:
-                    performStop()
-                    commandLock.lock()
-                    loopRunning = false
-                    commandLock.unlock()
-                    stateChanged()
-                    return
+            var keepRunning = true
+            // The node clock advances continuously while playing, so every
+            // iteration starts dirty: the FIRST read this iteration (clock,
+            // backpressure gate, summary) pays one playerTime allocation and
+            // the rest reuse it. Without this the cache would serve a stale
+            // value forever (observed: clock frozen mid-file, video queue
+            // pinned full, demux starved).
+            invalidateNodeClock()
+            // Drain ObjC autorelease temporaries every iteration. The loop
+            // runs as ONE dispatch block on the pipeline queue, so without a
+            // pool here the AVAudioTime objects allocated by every
+            // playerTime(forNodeTime:) call (plus PCM/sample-buffer
+            // temporaries) are never released for the file's lifetime
+            // (measured: ~150k live AVAudioTime after 30 s of playback,
+            // 630 MB after one movie).
+            autoreleasepool {
+                keepRunning = stepLoop(demuxer: demuxer, eof: &eof)
+            }
+            if !keepRunning { return }
+        }
+    }
+
+    /// One mailbox + demux iteration. Returns false when the loop must exit
+    /// (.stop handled or EOF fully drained); the caller wraps it in an
+    /// autoreleasepool.
+    private func stepLoop(demuxer: FFmpegDemuxer, eof: inout Bool) -> Bool {
+        if let cmd = takeCommand() {
+            switch cmd {
+            case .resume:
+                isPlaying = true
+                isPaused = false
+                startMonotonic = CACurrentMediaTime() - pausedClock
+                clockBaseAudio = audioPlayer != nil
+                // The pause reset the node and DISCARDED its pre-buffered
+                // audio; meanwhile the demux read cursor had already
+                // advanced up to maxAudioAheadSeconds past the audio
+                // position. Rewinding to the paused position re-reads that
+                // block, so audio resumes EXACTLY at pausedClock (no
+                // underrun gap / audio delay) instead of ~1.5s late.
+                // discardAudioBefore drops the already-heard (< pausedClock)
+                // prefix; video packets re-read are dropped by
+                // lastPresentedPTS.
+                if pausedClock > 0 {
+                    discardAudioBefore = pausedClock
+                    _ = try? demuxer.seek(to: max(0, pausedClock - 0.05))
                 }
-                continue
-            }
-            // Paused with no command pending: block until signaled.
-            if isPaused {
-                commandSignal.wait()
-                continue
-            }
-            if eof {
-                drainAndFinish()
+                restartAudioPlayer()
+                invalidateNodeClock()
+                NSLog("[Native] resume at %.3f", pausedClock)
+                stateChanged()
+            case .pause:
+                pausedClock = currentClock()
+                NSLog("[Native] pause at %.3f", pausedClock)
+                isPlaying = false
+                isPaused = true
+                if let player = audioPlayer {
+                    // Reset the node clock so resume is exact: the engine
+                    // keeps rendering a paused node, so playerTime would
+                    // otherwise keep advancing during pause. (The pre-
+                    // buffered audio is discarded here; .resume rewinds the
+                    // read cursor to pausedClock so no audio is lost.)
+                    player.stop()
+                    player.reset()
+                    audioClockOffset = pausedClock
+                }
+                audioFramesScheduled = 0
+                audioIsRunning = false
+                invalidateNodeClock()
+                stateChanged()
+            case .seek(let seconds):
+                performSeek(seconds: seconds, demuxer: demuxer)
+            case .switchAudio(let streamIndex):
+                performAudioSwitch(streamIndex: streamIndex, demuxer: demuxer)
+            case .switchSubtitle(let streamIndex):
+                performSubtitleSwitch(streamIndex: streamIndex, demuxer: demuxer)
+            case .stop:
+                performStop()
                 commandLock.lock()
                 loopRunning = false
                 commandLock.unlock()
-                return
+                stateChanged()
+                return false
             }
-            tick(demuxer: demuxer, eof: &eof)
+            return true
         }
+        // Paused with no command pending: block until signaled. The pool
+        // around this call makes each blocked wait a drain point too.
+        if isPaused {
+            commandSignal.wait()
+            return true
+        }
+        if eof {
+            drainAndFinish()
+            commandLock.lock()
+            loopRunning = false
+            commandLock.unlock()
+            return false
+        }
+        tick(demuxer: demuxer, eof: &eof)
+        return true
     }
 
     /// One iteration of the old demux loop body.
@@ -688,6 +740,7 @@ public final class PlaybackController {
                 audioIsRunning = false
             }
         }
+        invalidateNodeClock()
 
         do {
             try demuxer.seek(to: seconds)
@@ -725,6 +778,7 @@ public final class PlaybackController {
         if let vtSession { VTDecompressionSessionInvalidate(vtSession); self.vtSession = nil }
         if let audioEngine { audioEngine.stop() }
         if let audioDecoder { media_audio_decoder_free(audioDecoder); self.audioDecoder = nil }
+        invalidateNodeClock()
         demuxer?.close()
         demuxer = nil
         videoStreamIndex = nil
@@ -826,11 +880,27 @@ public final class PlaybackController {
 
     /// Seconds of audio currently scheduled ahead of the player's position.
     private func audioSecondsAhead(engine: AVAudioEngine, player: AVAudioPlayerNode) -> Double {
-        guard let nodeTime = player.lastRenderTime, let playerTime = player.playerTime(forNodeTime: nodeTime) else {
-            return Double(audioFramesScheduled) / Double(audioFormat?.sampleRate ?? 48000)
-        }
-        let played = Double(playerTime.sampleTime) / playerTime.sampleRate
+        // Same allocation-avoidance as currentClock(): read the node clock
+        // through the per-tick cache instead of calling playerTime directly.
+        let played = nodeSeconds(player: player) ?? 0
         return Double(audioFramesScheduled) / Double(audioFormat?.sampleRate ?? 48000) - played
+    }
+
+    /// Player-node time in seconds via the per-iteration cache (one
+    /// playerTime(forNodeTime:) call per loop iteration at most; nil when the
+    /// node hasn't started or has no render time yet).
+    private func nodeSeconds(player: AVAudioPlayerNode) -> Double? {
+        nodeClockLock.lock()
+        defer { nodeClockLock.unlock() }
+        if !nodeClockDirty, let cached = cachedNodeSeconds { return cached }
+        nodeClockDirty = false
+        guard let nodeTime = player.lastRenderTime,
+              let pt = player.playerTime(forNodeTime: nodeTime) else {
+            cachedNodeSeconds = nil
+            return nil
+        }
+        cachedNodeSeconds = Double(pt.sampleTime) / pt.sampleRate
+        return cachedNodeSeconds
     }
 
     // MARK: - Presentation
@@ -910,8 +980,8 @@ public final class PlaybackController {
         // position/timer advancing during a pause.
         if isPaused { return pausedClock }
         if clockBaseAudio, let engine = audioEngine, let player = audioPlayer,
-           let nodeTime = player.lastRenderTime, let pt = player.playerTime(forNodeTime: nodeTime) {
-            return Double(pt.sampleTime) / pt.sampleRate + audioClockOffset
+           let nodeSeconds = nodeSeconds(player: player) {
+            return nodeSeconds + audioClockOffset
         }
         return CACurrentMediaTime() - startMonotonic
     }
@@ -1005,6 +1075,7 @@ public final class PlaybackController {
             // (the engine itself stays running across the switch).
             restartAudioPlayer()
         }
+        invalidateNodeClock()
         guard let track = demuxer.track(at: streamIndex),
               track.type == MEDIA_TRACK_TYPE_AUDIO.rawValue else {
             stateChanged()
