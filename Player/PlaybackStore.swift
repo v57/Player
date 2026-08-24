@@ -1,5 +1,6 @@
 import Foundation
 import MediaPlayer
+import SQLite3
 import SwiftData
 
 /// All SwiftData persistence for the app: playback resume positions
@@ -19,14 +20,71 @@ final class PlaybackStore {
     /// app.
     private static let modelContainer: ModelContainer = {
         let schema = Schema([PlaybackRecord.self, TrackPick.self])
-        let disk = ModelConfiguration(schema: schema, cloudKitDatabase: .none)
+        // Explicit per-app store: a SwiftData app that omits a URL lands on
+        // default.store in whatever Application Support resolves to — for an
+        // UNSANDBOXED build that is the SHARED ~/Library/Application Support/
+        // default.store, where other unsandboxed SwiftData apps (Database)
+        // collide ("The file default.store couldn't be opened", dropped
+        // tables, lost data). Pinning a per-app URL keeps sandboxed and
+        // unsandboxed builds isolated from each other and from other apps.
+        let appSupport = URL.applicationSupportDirectory
+            .appendingPathComponent("dev.v57.player", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        } catch {
+            NSLog("[PlaybackStore] cannot create %@: %@", appSupport.path, error as NSError)
+        }
+        let storeURL = appSupport.appendingPathComponent("Player.store")
+        migrateLegacyDefaultStoreIfNeeded(to: storeURL)
+        let disk = ModelConfiguration(schema: schema, url: storeURL, cloudKitDatabase: .none)
         if let container = try? ModelContainer(for: schema, configurations: [disk]) {
             return container
         }
         // Unwritable/corrupt store: fall back to in-memory so playback works.
-        let memory = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-        return try! ModelContainer(for: schema, configurations: [memory])
+        // Log the failure — a silently missing disk store loses resume data.
+        do {
+            return try ModelContainer(for: schema, configurations: [disk])
+        } catch {
+            NSLog("[PlaybackStore] disk container failed, falling back to memory: %@",
+                  error as NSError)
+            let memory = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+            return try! ModelContainer(for: schema, configurations: [memory])
+        }
     }()
+
+    /// One-time relocation: builds before the pin stored at the SwiftData
+    /// default (<Application Support>/default.store). Copies it in place only
+    /// when the target is absent AND the source is genuinely ours (has a
+    /// ZPLAYBACKRECORD table — a foreign app's store must NOT be absorbed).
+    /// VACUUM INTO produces a consistent checkpointed snapshot even when the
+    /// legacy store runs WAL mode with a live writer.
+    private static func migrateLegacyDefaultStoreIfNeeded(to storeURL: URL) {
+        guard !FileManager.default.fileExists(atPath: storeURL.path) else { return }
+        let legacy = URL.applicationSupportDirectory.appendingPathComponent("default.store")
+        guard FileManager.default.fileExists(atPath: legacy.path) else { return }
+
+        var handle: OpaquePointer?
+        defer { sqlite3_close(handle) }
+        guard sqlite3_open_v2(legacy.path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+            let handle
+        else { return }
+        sqlite3_exec(handle, "PRAGMA busy_timeout = 5000", nil, nil, nil)
+        guard hasPlaybackTable(handle) else { return }
+        let target = storeURL.path.replacingOccurrences(of: "'", with: "''")
+        if sqlite3_exec(handle, "VACUUM INTO '\(target)'", nil, nil, nil) == SQLITE_OK {
+            NSLog("[PlaybackStore] migrated legacy store to %@", storeURL.path)
+        }
+    }
+
+    private static func hasPlaybackTable(_ handle: OpaquePointer?) -> Bool {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        let sql = "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='ZPLAYBACKRECORD'"
+        guard sqlite3_prepare_v2(handle, sql, -1, &stmt, nil) == SQLITE_OK,
+            sqlite3_step(stmt) == SQLITE_ROW
+        else { return false }
+        return sqlite3_column_int64(stmt, 0) > 0
+    }
 
     private let modelContext: ModelContext
 
