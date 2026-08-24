@@ -296,6 +296,15 @@ public final class NativeMediaPlayer: MediaPlayer {
         positionTimer = timer
     }
 
+    /// The position clock cannot move while paused/ended, so every 5 Hz
+    /// firing is pure overhead (runloop wake + Task hop to main). Kill the
+    /// timer when playback stops; the controller's state-change callback
+    /// (refreshFromController) restarts it on resume.
+    private func stopPositionTimer() {
+        positionTimer?.invalidate()
+        positionTimer = nil
+    }
+
     /// Pulls current clock/metrics from the controller (pipeline-safe getters).
     ///
     /// Paused-CPU guard: @Published writes fire objectWillChange even when
@@ -309,6 +318,7 @@ public final class NativeMediaPlayer: MediaPlayer {
         if nowPlaying != isPlaying {
             isPlaying = nowPlaying
             updateDisplaySleepPrevention()
+            if nowPlaying { startPositionTimer() } else { stopPositionTimer() }
         }
         guard nowPlaying else { return }
         let clock = controller.currentClockSafe()

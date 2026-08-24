@@ -7,6 +7,10 @@ import MediaPlayer
 struct ContentView: View {
     @EnvironmentObject private var player: MediaPlayerBox
     @EnvironmentObject private var uiState: PlayerUIState
+
+    /// True while a file drag hovers over the window; drives the drop
+    /// affordance overlay.
+    @State private var isDropTargeted = false
     
     var body: some View {
         ZStack {
@@ -14,15 +18,30 @@ struct ContentView: View {
             if player.fileName == nil {
                 emptyState
             }
-        }.overlay(alignment: .bottom) {
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Whole-window drop target: files dragged onto the window open
+        // through the same path as Open…/Open With. The engine's open()
+        // handles the security-scoped access and bookmark persistence.
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+            handleDrop(providers)
+            return true
+        }
+        .overlay(alignment: .bottom) {
             if player.fileName != nil, uiState.controlsVisible {
                 TimelineBar(player: player).transition(.blurReplace)
+            }
+        }
+        .overlay {
+            if isDropTargeted {
+                dropTargetOverlay
             }
         }
         .onHover { uiState.hovering = $0 }
         .animation(.easeInOut(duration: 0.2), value: uiState.hovering)
         .animation(.easeInOut(duration: 0.2), value: uiState.controlsHidden)
         .animation(.easeInOut(duration: 0.2), value: player.isPlaying)
+        .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         .navigationTitle(player.fileName ?? "Player")
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
             guard let window = note.object as? NSWindow else { return }
@@ -131,6 +150,68 @@ struct ContentView: View {
             url = URL(fileURLWithPath: record.filePath)
         }
         Task { try? await player.open(url) }
+    }
+
+    // MARK: - Drag & drop
+
+    /// Loads every dropped provider's URL and opens it. Completion hops to
+    /// main (loadObject's callback is off-main) before touching the player.
+    private func handleDrop(_ providers: [NSItemProvider]) {
+        for provider in providers {
+            _ = provider.loadObject(ofClass: URL.self) { item, _ in
+                Task { @MainActor in
+                    guard let url = item else { return }
+                    openDropped(url)
+                }
+            }
+        }
+    }
+
+    /// Opens a dropped file after validating it's a video — a text file or
+    /// folder dropped on the player shouldn't silently vanish; surface it
+    /// through the existing error alert instead.
+    private func openDropped(_ url: URL) {
+        guard Self.isVideoURL(url) else {
+            player.errorMessage = "\"\(url.lastPathComponent)\" is not a video file."
+            return
+        }
+        Task { try? await player.open(url) }
+    }
+
+    /// True for anything macOS classifies as a movie plus the extensions it
+    /// leaves as non-conforming dynamic UTIs that the FFmpeg engine still
+    /// plays.
+    private static func isVideoURL(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        if let type = UTType(filenameExtension: ext), type.conforms(to: .movie) {
+            return true
+        }
+        return Self.extraVideoExtensions.contains(ext)
+    }
+
+    /// Extensions whose UTI resolves to a dynamic (non-public.movie) type on
+    /// macOS 27 (probed): mkv, vob, divx, asf. rmvb/m2v are included for the
+    /// same reason — the engine is FFmpeg and plays them regardless.
+    private static let extraVideoExtensions: Set<String> = [
+        "mkv", "vob", "divx", "asf", "rmvb", "m2v",
+    ]
+
+    /// Full-window drop highlight, shown while a file drag hovers over the
+    /// window: dim, accent stroke, and a centered label.
+    private var dropTargetOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.35)
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.accentColor, lineWidth: 2)
+                .padding(12)
+            Label("Drop to Play", systemImage: "play.circle.fill")
+                .font(.title2)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+                .background(.regularMaterial, in: Capsule())
+        }
+        .allowsHitTesting(false)
+        .transition(.opacity)
     }
     
     private var errorBinding: Binding<Bool> {

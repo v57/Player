@@ -465,6 +465,18 @@ public final class PlaybackController {
         audioIsRunning = false
     }
 
+    /// Stops the audio RENDER path without tearing down the graph. A running
+    /// AVAudioEngine keeps its realtime render thread active even when every
+    /// node is stopped — it renders silence at audio-buffer rate, which is
+    /// measurable CPU/power while paused or after EOF. pause() halts the
+    /// output unit cheaply (no graph teardown); restartAudioPlayer() resumes
+    /// it on play/resume via `!engine.isRunning → start()`.
+    private func pauseAudioEngine() {
+        guard let engine = audioEngine, engine.isRunning else { return }
+        engine.pause()
+        audioIsRunning = false
+    }
+
     /// Puts the audio player node back into the playing state. Starts the
     /// engine first only if it isn't running; the NODE always needs play()
     /// after stop()/reset()/pause() — the engine keeps running across a
@@ -612,7 +624,7 @@ public final class PlaybackController {
                     audioClockOffset = pausedClock
                 }
                 audioFramesScheduled = 0
-                audioIsRunning = false
+                pauseAudioEngine()
                 invalidateNodeClock()
                 stateChanged()
             case .seek(let seconds):
@@ -1128,6 +1140,8 @@ public final class PlaybackController {
                 usleep(8000)
             }
         }
+        // Audio played out; stop its render thread (same cost as pause).
+        pauseAudioEngine()
         isPlaying = false
         stateChanged()
     }

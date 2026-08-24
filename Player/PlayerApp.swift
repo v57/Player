@@ -29,7 +29,7 @@ struct PlayerApp: App {
                 .frame(minWidth: 800, minHeight: 500)
                 // Single-window app. By default WindowGroup opens a NEW
                 // window for every external open event (Finder "Open With…",
-                // `open`, URL schemes) and delivers the URL to that window's
+                // `open`, Dock drops) and delivers the URL to that window's
                 // onOpenURL. With a shared player, a second window cannot
                 // render the shared engine's video surface — black screen.
                 // This VIEW modifier makes the already open scene claim every
@@ -38,6 +38,12 @@ struct PlayerApp: App {
                 // new one.
                 .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
                 .onOpenURL { url in
+                    // Dock-icon drops, Finder "Open With…", and `open` all
+                    // arrive here. Verified on macOS 27: with
+                    // handlesExternalEvents claiming the event for the
+                    // scene, SwiftUI routes it here and an NSApplication
+                    // delegate implementing application(_:open:) is never
+                    // called. External opens must stay on this path.
                     Task { try? await player.open(url) }
                 }
         }
