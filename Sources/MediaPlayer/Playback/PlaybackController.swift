@@ -1287,6 +1287,18 @@ public final class PlaybackController {
     do {
       let current = currentClock()
       try demuxer.seek(to: current)
+      // The demuxer re-seeks BACKWARD to a keyframe (GOP-granular, ~10 s on
+      // this corpus), so the loop re-reads VIDEO and AUDIO from that
+      // keyframe. Without this guard every pre-target audio packet
+      // (keyframe -> current) is re-decoded and re-scheduled, ballooning
+      // audioSecondsAhead far past the maxAudioAheadSeconds cap — the demux
+      // loop then spends every tick in the audio backpressure sleep
+      // (usleep(4000); return) instead of reading video or presenting
+      // frames. That is the "serious fps drop until I pause and unpause":
+      // pause resets the node + audioFramesScheduled=0, and resume rewinds
+      // the demuxer to pausedClock and re-arms discardAudioBefore, clearing
+      // the backlog. Mirrors performSeek / performAudioSwitch.
+      discardAudioBefore = current
       NSLog("[Native] subtitle track set to %@", streamIndex.map(String.init) ?? "off")
     } catch { stateChanged() }
   }
