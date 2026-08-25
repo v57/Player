@@ -2,6 +2,9 @@ import MediaPlayer
 import SwiftUI
 
 @main struct PlayerApp: App {
+  /// Quit the app when its last window closes (standard macOS behavior).
+  @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
   /// The concrete MediaPlayerBox wraps the native engine; views observe the
   /// box (an existential cannot be an @EnvironmentObject — probed, see
   /// MediaPlayerBox). Wave 6 removed the libmpv engine entirely — native is
