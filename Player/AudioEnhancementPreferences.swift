@@ -7,13 +7,13 @@ import MediaPlayer
 /// preference does not belong in that schema, so the mode lives in
 /// UserDefaults (documented decision in the dialogue-enhancement plan, Task 9).
 enum AudioEnhancementPreferences {
-    private static let key = "audioEnhancementMode"
+  private static let key = "audioEnhancementMode"
 
-    static var current: AudioEnhancementMode {
-        AudioEnhancementMode(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .original
-    }
+  static var current: AudioEnhancementMode {
+    AudioEnhancementMode(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .original
+  }
 
-    static func save(_ mode: AudioEnhancementMode) {
-        UserDefaults.standard.set(mode.rawValue, forKey: key)
-    }
+  static func save(_ mode: AudioEnhancementMode) {
+    UserDefaults.standard.set(mode.rawValue, forKey: key)
+  }
 }
