@@ -32,6 +32,16 @@ public final class NativeMediaPlayer: MediaPlayer {
     @Published public private(set) var chapters: [PlayerChapter] = []
     @Published public var errorMessage: String?
 
+    /// Dialogue-enhancement mode. The app restores the saved value on launch;
+    /// the setter routes to the controller (parameter-only while playing,
+    /// stashed until setup when idle). Published so menu UI updates live.
+    @Published public var enhancementMode: AudioEnhancementMode = .original {
+        didSet {
+            guard enhancementMode != oldValue else { return }
+            controller.setEnhancementMode(enhancementMode)
+        }
+    }
+
     private var currentFilePath: String?
     /// The URL whose sandbox file access we hold open (user-selected files
     /// delivered via fileImporter/Open With are security-scoped). Kept for

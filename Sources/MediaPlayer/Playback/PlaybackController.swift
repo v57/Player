@@ -3,6 +3,7 @@ import CoreMedia
 import CoreVideo
 import VideoToolbox
 import AVFoundation
+import Accelerate
 import MediaPlayerCDemux
 
 /// One decoded video frame ready for presentation.
@@ -154,6 +155,62 @@ public final class PlaybackController {
     private var audioFramesScheduled = 0     // samples ahead of clock
     private var audioBytesPerFrame: Int = 0
     private var audioIsRunning = false
+    /// The channel count the audio DECODER emits for the current track (the
+    /// player format's channel count differs when the source is being
+    /// downmixed app-side to stereo). The buffer-fill invariant compares
+    /// decoded frames against THIS, not the player format.
+    private var audioSourceChannels = 0
+
+    // Audio enhancement (dialogue modes). The mode and the downmix tables are
+    // read per decoded frame from the pipeline queue and written from the
+    // main thread (menu selection), so they live behind a lock. The chain
+    // pointer itself follows the codebase's existing cross-thread reference
+    // pattern (audioEngine/audioPlayer are read on main the same way).
+    private let enhancementLock = NSLock()
+    private var enhancementMode: AudioEnhancementMode = .original
+    private var enhancementChain: AudioEnhancementChain?
+    /// Source roles when the multichannel source is being downmixed app-side
+    /// to stereo (stereo output device); nil otherwise.
+    private var downmixRoles: [ChannelRole]?
+    /// Precomputed Nx2 matrices per mode (original/balanced/dialogue) for the
+    /// current source layout — buffer fill picks a matrix by mode with no
+    /// per-sample math.
+    private var downmixMatrices: [AudioEnhancementMode: [[Float]]] = [:]
+    private var audioFormatMismatchLogged = false
+
+    private func currentMode() -> AudioEnhancementMode {
+        enhancementLock.lock()
+        defer { enhancementLock.unlock() }
+        return enhancementMode
+    }
+
+    /// The active downmix matrix for the current mode, or nil when the source
+    /// is not being downmixed. Called per decoded frame (pipeline queue).
+    private func currentDownmixMatrix() -> [[Float]]? {
+        enhancementLock.lock()
+        defer { enhancementLock.unlock() }
+        guard let roles = downmixRoles, roles.count > 2 else { return nil }
+        return downmixMatrices[enhancementMode]
+    }
+
+    /// Sets the enhancement mode (UI entry). Parameter-only when the chain is
+    /// live — no graph changes, no restart, pop-free (the plan's runtime
+    /// switching requirement); stashed and applied at the next setupAudio when
+    /// no chain exists yet (mode picked before open / after stop).
+    func setEnhancementMode(_ mode: AudioEnhancementMode) {
+        enhancementLock.lock()
+        enhancementMode = mode
+        enhancementLock.unlock()
+        if let chain = enhancementChain {
+            chain.apply(preset: AudioEnhancementPreset.preset(for: mode))
+        }
+        NSLog("[Native] enhancement mode: %@", mode.rawValue)
+    }
+
+    /// Current mode (MainActor-safe read for the UI).
+    func enhancementModeValue() -> AudioEnhancementMode {
+        currentMode()
+    }
 
     // Video presentation
     private var videoQueueLock = NSLock()
@@ -405,10 +462,17 @@ public final class PlaybackController {
             decompressionOutputRefCon: Unmanaged.passUnretained(box).toOpaque())
 
         var session: VTDecompressionSession?
+        // Output pixel buffers at the CODEC's native dimensions (from the
+        // format description). Previously hardcoded 1920x816 (the old sample's
+        // size) — VideoToolbox then SCALED every stream to 1920x816, which
+        // squeezed 16:9 content into a 2.35:1 aspect (report: video.mkv
+        // "opens as 21/9 with squeezed image"). Coded dims keep the rendered
+        // aspect correct for every file.
+        let codedDims = CMVideoFormatDescriptionGetDimensions(fd)
         let attrs: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
-            kCVPixelBufferWidthKey as String: 1920,
-            kCVPixelBufferHeightKey as String: 816,
+            kCVPixelBufferWidthKey as String: Int(codedDims.width),
+            kCVPixelBufferHeightKey as String: Int(codedDims.height),
         ]
         let vts = VTDecompressionSessionCreate(
             allocator: kCFAllocatorDefault, formatDescription: fd,
@@ -435,6 +499,7 @@ public final class PlaybackController {
         audioDecoder = dec
 
         guard let track = demuxer.track(at: streamIndex) else { throw NativePlayerError.audioDecoderFailed }
+        audioSourceChannels = track.channelCount
         let tag: AudioChannelLayoutTag = (track.layoutName == "5.1(side)") ? kAudioChannelLayoutTag_MPEG_5_1_B
             : (track.layoutName == "5.1") ? kAudioChannelLayoutTag_MPEG_5_1_A
             : kAudioChannelLayoutTag_Unknown
@@ -447,14 +512,71 @@ public final class PlaybackController {
         } else {
             layout = AVAudioChannelLayout(layoutTag: kAudioChannelLayoutTag_Stereo)!
         }
-        let format = AVAudioFormat(standardFormatWithSampleRate: Double(track.sampleRate), channelLayout: layout)
-        audioFormat = format
-        audioBytesPerFrame = Int(format.streamDescription.pointee.mBytesPerFrame)
+        let sourceFormat = AVAudioFormat(standardFormatWithSampleRate: Double(track.sampleRate), channelLayout: layout)
 
         let engine = AVAudioEngine()
         let player = AVAudioPlayerNode()
         engine.attach(player)
-        engine.connect(player, to: engine.mainMixerNode, format: format)
+
+        // --- Audio enhancement (dialogue modes) ---
+        // Channel roles come from the FFmpeg native mask; the output-device
+        // channel count decides whether the multichannel source stays
+        // multichannel (passthrough) or is downmixed app-side to stereo.
+        // CHANNEL-COUNT INVARIANT (plan Task 8): the player format's channel
+        // count must equal the decoder frame's channels — the selection below
+        // always yields either the exact source channel count or an explicit
+        // stereo downmix format.
+        let roles = track.layoutMask != 0 ? ChannelRoleMap.roles(forMask: track.layoutMask) : nil
+        let deviceChannels = engine.outputNode.outputFormat(forBus: 0).channelCount
+        // roles.count == channelCount sanity: FFmpeg guarantees mask bitcount ==
+        // channels, but degrade to passthrough if a layout ever disagrees.
+        let needsDownmix = roles != nil && roles!.count == track.channelCount
+            && Int(deviceChannels) < track.channelCount
+        let playerFormat: AVAudioFormat
+        if needsDownmix, let roles {
+            playerFormat = AVAudioFormat(standardFormatWithSampleRate: Double(track.sampleRate), channels: 2)!
+            enhancementLock.lock()
+            downmixRoles = roles
+            downmixMatrices = Dictionary(uniqueKeysWithValues: AudioEnhancementMode.allCases.map { mode in
+                (mode, DownmixMatrix.coefficients(roles: roles,
+                                                  centerGainDB: AudioEnhancementPreset.preset(for: mode).centerGainDB)!)
+            })
+            enhancementLock.unlock()
+            NSLog("[Audio] downmix %d ch -> stereo (device %d ch) roles=%@",
+                  track.channelCount, deviceChannels, String(describing: roles))
+        } else {
+            playerFormat = sourceFormat
+            enhancementLock.lock()
+            downmixRoles = nil
+            downmixMatrices = [:]
+            enhancementLock.unlock()
+        }
+        audioFormat = playerFormat
+        audioBytesPerFrame = Int(playerFormat.streamDescription.pointee.mBytesPerFrame)
+
+        // Processing chain (dynamics -> limiter -> EQ) whenever the player
+        // outputs stereo; multichannel passthrough (multichannel device) stays
+        // untouched in every mode (phase-1 scope — documented follow-up).
+        // The chain is ALWAYS present for stereo output, even in original mode
+        // (everything bypassed), so mode switches are parameter-only and never
+        // recreate the graph.
+        if let chain = AudioEnhancementChain(engine: engine), playerFormat.channelCount <= 2 {
+            enhancementChain = chain
+            chain.install(player: player, mainMixer: engine.mainMixerNode, format: playerFormat)
+            let mode = currentMode()
+            chain.apply(preset: AudioEnhancementPreset.preset(for: mode))
+            // Task 11: fixed downstream latency. The master clock is the
+            // player node (UPSTREAM of the chain), so this latency does not
+            // move the clock — it only shifts the fixed output path. Logged
+            // for the record; expected << 30 ms (single render quantum + AU
+            // lookahead), no video compensation needed.
+            let latMs = engine.outputNode.presentationLatency * 1000
+            NSLog("[Audio] enhancement chain installed (mode %@, %d ch, device latency %.1f ms)",
+                  mode.rawValue, playerFormat.channelCount, latMs)
+        } else {
+            enhancementChain = nil
+            engine.connect(player, to: engine.mainMixerNode, format: playerFormat)
+        }
         // Headless/muted testing: PLAYER_MUTE=1 silences the OUTPUT while the
         // full decode->schedule->render pipeline (and the audio master clock)
         // keeps running — the mute-autoplay pattern for automated runs.
@@ -790,6 +912,11 @@ public final class PlaybackController {
         if let vtSession { VTDecompressionSessionInvalidate(vtSession); self.vtSession = nil }
         if let audioEngine { audioEngine.stop() }
         if let audioDecoder { media_audio_decoder_free(audioDecoder); self.audioDecoder = nil }
+        enhancementChain = nil
+        enhancementLock.lock()
+        downmixRoles = nil
+        downmixMatrices = [:]
+        enhancementLock.unlock()
         invalidateNodeClock()
         demuxer?.close()
         demuxer = nil
@@ -877,13 +1004,49 @@ public final class PlaybackController {
             defer { media_audio_frame_free(&frame) }
 
             let n = Int(frame.nb_samples)
+            let decodeChannels = Int(frame.channels)
+            // Channel-count invariant (dialogue-enhancement plan, Task 8): the
+            // decoder frame's channels must equal the track's source channel
+            // count or the deinterleave/downmix below reads misaligned data.
+            // (The old code silently broke 7.1 sources, which collapsed to a
+            // 2-ch player format while the decoder emitted 8 channels. Note
+            // the player format may legitimately differ — app-side downmix.)
+            guard decodeChannels == audioSourceChannels else {
+                if !audioFormatMismatchLogged {
+                    audioFormatMismatchLogged = true
+                    NSLog("[Native] audio format mismatch: decoder %d ch vs source %d ch — buffer skipped",
+                          decodeChannels, audioSourceChannels)
+                }
+                continue
+            }
             guard let pcm = AVAudioPCMBuffer(pcmFormat: audioFormat, frameCapacity: AVAudioFrameCount(n)) else { continue }
             pcm.frameLength = AVAudioFrameCount(n)
-            let channels = Int(audioFormat.channelCount)
-            let interleaved = [Float](UnsafeBufferPointer(start: frame.data, count: n * channels))
-            for ch in 0..<channels {
-                guard let dst = pcm.floatChannelData?[ch] else { continue }
-                for i in 0..<n { dst[i] = interleaved[i * channels + ch] }
+            let outChannels = Int(audioFormat.channelCount)
+            let interleaved = [Float](UnsafeBufferPointer(start: frame.data, count: n * decodeChannels))
+
+            if let matrix = currentDownmixMatrix() {
+                // App-side weighted downmix — the enhancement plan's sanctioned
+                // custom stage (no stock mixer AU: AUMatrixMixer/
+                // AUMultiChannelMixer render silence in real-time graphs on this
+                // SDK — see AudioEnhancementChain header). Vectorized with vDSP
+                // directly on the interleaved data (stride = channel count);
+                // runs in the demux loop, OFF the realtime thread.
+                for outCh in 0..<2 {
+                    guard let dst = pcm.floatChannelData?[outCh] else { continue }
+                    vDSP_vclr(dst, 1, vDSP_Length(n))
+                    for (inCh, row) in matrix.enumerated() where row[outCh] != 0 {
+                        var coeff = row[outCh]
+                        interleaved.withUnsafeBufferPointer { src in
+                            vDSP_vsma(src.baseAddress!.advanced(by: inCh), decodeChannels,
+                                      &coeff, dst, 1, dst, 1, vDSP_Length(n))
+                        }
+                    }
+                }
+            } else {
+                for ch in 0..<outChannels {
+                    guard let dst = pcm.floatChannelData?[ch] else { continue }
+                    for i in 0..<n { dst[i] = interleaved[i * decodeChannels + ch] }
+                }
             }
             player.scheduleBuffer(pcm, at: nil)
             audioFramesScheduled += n
@@ -970,10 +1133,11 @@ public final class PlaybackController {
         }
         let dt = now - summaryLastTime
         guard dt >= 1.0 else { return }
-        NSLog("[Native] 1s pos=%.3f fps=%.1f/%.2f drop=%d drift=%+.3f vq=%d pkt=%d aud=%.2fs",
+        NSLog("[Native] 1s pos=%.3f fps=%.1f/%.2f drop=%d drift=%+.3f vq=%d pkt=%d aud=%.2fs (mode=%@ ch=%d)",
               clock, Double(summaryPresented) / dt, contentFps,
               droppedFrames - summaryDroppedBase, summaryDrift,
-              videoQueueDepth, summaryPackets, audioSecondsAheadNow())
+              videoQueueDepth, summaryPackets, audioSecondsAheadNow(),
+              currentMode().rawValue, audioFormat?.channelCount ?? 0)
         summaryLastTime = now
         summaryPresented = 0
         summaryPackets = 0

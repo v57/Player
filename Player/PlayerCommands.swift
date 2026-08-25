@@ -32,6 +32,9 @@ struct PlayerCommands: Commands {
             EmptyView()
         }
         CommandMenu("Audio") {
+            // Dialogue-enhancement mode: plain-language rows, persisted across
+            // launches; no compressor jargon in the player UI (spec).
+            Divider()
             if player.audioTracks.isEmpty {
                 Text("No audio tracks").disabled(true)
             } else {
@@ -40,6 +43,15 @@ struct PlayerCommands: Commands {
                         get: { player.audioTrackID == track.id },
                         set: { on in if on { player.selectAudioTrack(track.id) } }
                     ))
+                }
+            }
+            Divider()
+            Section("Mode") {
+                ForEach(AudioEnhancementMode.allCases) { mode in
+                    Button(mode.displayName) {
+                        player.enhancementMode = mode
+                        AudioEnhancementPreferences.save(mode)
+                    }
                 }
             }
         }

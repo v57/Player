@@ -64,6 +64,10 @@ public protocol MediaPlayer: ObservableObject, AnyObject {
     /// Active subtitle track id (nil = subtitles off).
     var subtitleTrackID: Int? { get }
 
+    /// Dialogue-enhancement mode (Original / Balanced / Enhance Dialogue).
+    /// Settable during playback — parameter-only in the engine, no restart.
+    var enhancementMode: AudioEnhancementMode { get set }
+
     /// Chapter list (title + start time), empty when the file has none.
     var chapters: [PlayerChapter] { get }
 

@@ -115,8 +115,10 @@ public final class MediaMetalView: NSView, VideoFrameSink {
         if !diagFirstPresent {
             diagFirstPresent = true
             let backing = convertToBacking(bounds)
-            NSLog("[Native] VIEW first present pts=%.3f renderer=%@ layerIsViewLayer=%d win=%@ bounds=%.0fx%.0f backing=%.0fx%.0f",
-                  frame.pts, renderer != nil ? "ok" : "nil", layer === metalLayer ? 1 : 0,
+            let fw = CVPixelBufferGetWidth(frame.pixelBuffer)
+            let fh = CVPixelBufferGetHeight(frame.pixelBuffer)
+            NSLog("[Native] VIEW first present pts=%.3f frame=%ldx%ld renderer=%@ layerIsViewLayer=%d win=%@ bounds=%.0fx%.0f backing=%.0fx%.0f",
+                  frame.pts, fw, fh, renderer != nil ? "ok" : "nil", layer === metalLayer ? 1 : 0,
                   window != nil ? "yes" : "no", bounds.width, bounds.height, backing.width, backing.height)
         }
         currentFrame = frame

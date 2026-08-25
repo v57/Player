@@ -16,6 +16,15 @@ struct PlayerApp: App {
         // seam (the library never touches SwiftData itself).
         if let engine = box.engine as? NativeMediaPlayer {
             engine.store = PlaybackStore.shared
+            // Restore the user's dialogue-enhancement mode (UserDefaults; the
+            // engine stays idle, so the value is stashed and applied at setup).
+            // PLAYER_ENHANCEMENT_MODE overrides it for headless verification
+            // (same pattern as PLAYER_MUTE) — the override drives the exact
+            // same setter path the Audio menu uses.
+            let restored = AudioEnhancementPreferences.current
+            let effective = ProcessInfo.processInfo.environment["PLAYER_ENHANCEMENT_MODE"].flatMap(AudioEnhancementMode.init(rawValue:)) ?? restored
+            NSLog("[App] enhancement mode at launch: %@ (defaults %@)", effective.rawValue, restored.rawValue)
+            engine.enhancementMode = effective
         }
         _player = StateObject(wrappedValue: box)
         _uiState = StateObject(wrappedValue: PlayerUIState(player: box))

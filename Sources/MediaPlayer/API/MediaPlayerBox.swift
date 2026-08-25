@@ -57,6 +57,10 @@ public final class MediaPlayerBox: MediaPlayer {
     public var subtitleTracks: [MediaTrack] { engine.subtitleTracks }
     public var audioTrackID: Int? { engine.audioTrackID }
     public var subtitleTrackID: Int? { engine.subtitleTrackID }
+    public var enhancementMode: AudioEnhancementMode {
+        get { engine.enhancementMode }
+        set { engine.enhancementMode = newValue }
+    }
     public var chapters: [PlayerChapter] { engine.chapters }
 
     public func open(_ url: URL) async throws { try await engine.open(url) }
