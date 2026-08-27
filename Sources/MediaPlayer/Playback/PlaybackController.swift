@@ -237,6 +237,13 @@ public final class PlaybackController {
   /// Cleared once a packet at/after the target is seen.
   private var discardAudioBefore: Double?
 
+  /// When the demux loop ends because the file is likely incomplete (a
+  /// downloader is still writing it), this holds the end position + flag
+  /// while stepLoop decides how to stop. Consumed there instead of the
+  /// normal drain-and-finish path so the engine can wait for the file to
+  /// grow and retry. nil = no partial end pending.
+  private var prematureEnd: (position: Double, wasError: Bool)?
+
   // Clock
   private var startMonotonic: CFTimeInterval = 0
   private var clockBaseAudio = false
@@ -282,6 +289,13 @@ public final class PlaybackController {
   private let sinkLock = NSLock()
   /// Hop from pipeline thread to MainActor.
   private var onMain: (@MainActor () -> Void)?
+  /// Fired on the MainActor when the demux loop stops because the file is
+  /// likely INCOMPLETE (a downloader is still writing it): a clean EOF reached
+  /// before the container's declared duration, or a read error mid-stream.
+  /// Carries the position playback should resume from once the file has
+  /// grown, and whether the stop was a hard read error (vs a clean EOF).
+  /// The engine uses this to enter its "waiting for file update" flow.
+  private var onPartialEnd: (@MainActor (_ position: Double, _ wasError: Bool) -> Void)?
 
   // MARK: - Lifecycle
 
@@ -289,9 +303,16 @@ public final class PlaybackController {
 
   /// Sets the frame sink list (MainActor) and a callback run on MainActor
   /// after each state change. Registering the same view twice is a no-op.
-  func configure(sink: (any VideoFrameSink)?, onStateChange: (@MainActor () -> Void)?) {
+  func configure(
+    sink: (any VideoFrameSink)?, onStateChange: (@MainActor () -> Void)?,
+    onPartialEnd: (@MainActor (_ position: Double, _ wasError: Bool) -> Void)? = nil
+  ) {
     if let sink { registerSink(sink) }
     if onStateChange != nil { self.onMain = onStateChange }
+    // Only overwrite when provided: `registerSink` re-calls configure with no
+    // onPartialEnd (a default nil), which would otherwise clobber the one set
+    // at engine init.
+    if onPartialEnd != nil { self.onPartialEnd = onPartialEnd }
   }
 
   private func registerSink(_ sink: any VideoFrameSink) {
@@ -776,6 +797,24 @@ public final class PlaybackController {
       commandSignal.wait()
       return true
     }
+    if let pe = prematureEnd {
+      prematureEnd = nil
+      // Incomplete file (still being downloaded): stop WITHOUT the drain
+      // path — there is no trailing audio to play out (the data simply is not
+      // on disk yet), so draining would wait ~2 s pointlessly before "ending".
+      // Signal the engine so it can wait for the file to grow and retry.
+      performStop()
+      commandLock.lock()
+      loopRunning = false
+      commandLock.unlock()
+      stateChanged()
+      if let cb = onPartialEnd {
+        let pos = pe.position
+        let err = pe.wasError
+        Task { @MainActor in cb(pos, err) }
+      }
+      return false
+    }
     if eof {
       drainAndFinish()
       commandLock.lock()
@@ -814,8 +853,18 @@ public final class PlaybackController {
 
     do {
       guard let pkt = try demuxer.readPacket() else {
+        // EOF: clean only if we reached the container's declared duration.
+        // A downloader still writing the file (reserved space, filled
+        // progressively) hits a clean read EOF well before the real end —
+        // treat that as a partial end so the engine waits for it to grow.
+        if isPrematureEOF(demuxer: demuxer) {
+          let pos = currentClock()
+          NSLog("[Native] premature EOF at %.3f (file likely still downloading)", pos)
+          prematureEnd = (position: pos, wasError: false)
+        } else {
+          NSLog("[Native] EOF")
+        }
         eof = true
-        NSLog("[Native] EOF")
         return
       }
       summaryPackets += 1
@@ -834,7 +883,25 @@ public final class PlaybackController {
       } else if let subIndex, pkt.streamID == subIndex {
         collectSubtitlePacket(pkt)
       }
-    } catch { eof = true }
+    } catch {
+      // A read error can be a genuinely corrupt stream or the boundary of a
+      // not-yet-downloaded file. It is never a clean end, so always surface
+      // it as a partial end and let the engine decide (wait vs hard error).
+      let pos = currentClock()
+      NSLog("[Native] demux read error at %.3f: %@", pos, error.localizedDescription)
+      prematureEnd = (position: pos, wasError: true)
+      eof = true
+    }
+  }
+
+  /// True when a clean EOF was reached before the container's declared
+  /// duration — the file is incomplete (a downloader is still writing it),
+  /// so playback should wait for the file to grow and retry rather than
+  /// ending. A file with no known duration is treated as a real end (we
+  /// cannot distinguish, and ending is the safe non-sticky choice).
+  private func isPrematureEOF(demuxer: FFmpegDemuxer) -> Bool {
+    guard let duration = demuxer.duration, duration > 0 else { return false }
+    return currentClock() < duration - 1.0
   }
 
   /// Seek internals (flush, keyframe seek, VT rebuild, clock reset). Runs

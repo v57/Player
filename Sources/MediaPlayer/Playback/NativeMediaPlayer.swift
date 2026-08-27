@@ -31,6 +31,13 @@ import MediaPlayerCDemux
   @Published public private(set) var chapters: [PlayerChapter] = []
   @Published public var errorMessage: String?
 
+  /// True while playback is paused because the file is still being
+  /// downloaded (a downloader reserved space then writes it progressively).
+  /// The demux hit a premature end; the engine is observing the file and
+  /// will retry automatically when it is updated (throttled to once every
+  /// 2 s). Drives the red "Waiting" badge in the top-leading corner.
+  @Published public private(set) var isWaitingForFileUpdate = false
+
   /// Dialogue-enhancement mode. The app restores the saved value on launch;
   /// the setter routes to the controller (parameter-only while playing,
   /// stashed until setup when idle). Published so menu UI updates live.
@@ -60,6 +67,20 @@ import MediaPlayerCDemux
   /// behavior). Released on pause/stop/EOF; re-acquired on resume.
   private var playbackActivity: NSObjectProtocol?
 
+  // MARK: - File-update wait (playing a still-downloading file)
+
+  /// Position to resume from once the file has grown, while
+  /// `isWaitingForFileUpdate` is true. Captured at the premature end.
+  private var waitingResumePosition: Double?
+  /// 2 s repeating timer that stats the file and retries when it changes.
+  private var fileUpdateTimer: Timer?
+  /// Last seen (size, mtime) of the file, so a tick only fires on a real
+  /// update — the throttle (one retry per 2 s) the requirement asks for.
+  private var lastFileSignature: FileSignature?
+  /// The URL being played/waited on, kept so a retry re-opens the same
+  /// security-scoped file without losing the grant.
+  private var currentFileURL: URL?
+
   /// Reported state machine. The controller drives the coarse states; the
   /// finer ones (buffering/seeking/ended) are derived here until the
   /// controller exposes its own transitions.
@@ -69,7 +90,12 @@ import MediaPlayerCDemux
   public var activeSubtitleCue: String? { controller.subtitleCue(at: position)?.text }
 
   public init() {
-    controller.configure(sink: nil, onStateChange: { [weak self] in self?.refreshFromController() })
+    controller.configure(
+      sink: nil,
+      onStateChange: { [weak self] in self?.refreshFromController() },
+      onPartialEnd: { [weak self] position, wasError in
+        self?.handlePartialEnd(position: position, wasError: wasError)
+      })
     terminationObserver = NotificationCenter.default.addObserver(
       forName: NSApplication.willTerminateNotification, object: nil, queue: .main
     ) { [weak self] _ in MainActor.assumeIsolated { self?.saveCurrentPosition() } }
@@ -78,11 +104,30 @@ import MediaPlayerCDemux
   // MARK: - Transport
 
   public func open(_ url: URL) async throws {
-    saveCurrentPosition()
-    // Hold the sandbox grant (security-scoped URL) for the file's whole
-    // lifetime; the demuxer reads from the fd asynchronously.
-    if url.startAccessingSecurityScopedResource() { scopedURL = url }
+    try await openInternal(url, resumeOverride: nil)
+  }
+
+  /// Shared open path. `resumeOverride`, when non-nil, resumes at exactly
+  /// that position instead of consulting the store (used by the file-update
+  /// wait retry). Opening a new (different) file cancels any in-flight wait.
+  private func openInternal(_ url: URL, resumeOverride: Double?) async throws {
+    stopWaitingForFileUpdate()
+    if resumeOverride == nil { saveCurrentPosition() }
+    // Hold/replace the sandbox grant (security-scoped URL) for the file's
+    // whole lifetime; the demuxer reads from the fd asynchronously. Reuse
+    // the existing grant when retrying the SAME file (so the wait keeps its
+    // scoped access across the retry) instead of double-acquiring.
+    currentFileURL = url.standardizedFileURL
+    // Compare the standardized path so a retry on the SAME file (the wait
+    // flow) reuses the grant we still hold. Comparing raw URLs would treat
+    // /tmp/... vs /private/tmp/... (standardized) as different files and
+    // needlessly drop + re-acquire the security-scoped access.
+    if scopedURL?.standardizedFileURL != currentFileURL {
+      releaseScopedAccess()
+      if url.startAccessingSecurityScopedResource() { scopedURL = url }
+    }
     state = .opening
+    isWaitingForFileUpdate = false
     do {
       let info = try await controller.open(url)
       currentFilePath = url.standardizedFileURL.path
@@ -90,7 +135,7 @@ import MediaPlayerCDemux
       duration = info.duration ?? 0
       mapTracks(info.allTracks)
       chapters = info.chapters.map { PlayerChapter(title: $0.title, startTime: $0.startTime) }
-      pendingResumePosition = store?.resumePosition(for: currentFilePath ?? "")
+      pendingResumePosition = resumeOverride ?? store?.resumePosition(for: currentFilePath ?? "")
       pendingAudioPick = store?.latestTrackPick(kind: "audio")
       pendingSubPick = store?.latestTrackPick(kind: "sub")
       state = .ready
@@ -107,9 +152,17 @@ import MediaPlayerCDemux
       controller.play()
       applyPendingResume()
     } catch {
-      releaseScopedAccess()
-      state = .failed
-      errorMessage = nativeErrorString(error)
+      // A file being downloaded may not be probe-able yet (the container
+      // header is not fully written). If the file is still an active file on
+      // disk, wait for it to grow rather than surfacing a hard error;
+      // otherwise (a genuinely unplayable/static file) fail as usual.
+      if fileIsRecentlyActive(currentFileURL?.path ?? url.path) {
+        beginWaitingForFileUpdate(at: resumeOverride ?? 0)
+      } else {
+        releaseScopedAccess()
+        state = .failed
+        errorMessage = nativeErrorString(error)
+      }
     }
   }
 
@@ -353,6 +406,99 @@ import MediaPlayerCDemux
     NSLog("[Native] saved position %.3f/%.3f s", position, duration)
   }
 
+  // MARK: - File-update wait (partial / corrupted playback retry)
+
+  /// Called on MainActor when the pipeline detected a partial end — a clean
+  /// EOF short of the declared duration, or a read error — i.e. a file still
+  /// being downloaded. Decides whether to wait for the file to grow (the
+  /// flow behind the "Waiting" badge) or surface a hard error.
+  private func handlePartialEnd(position: Double, wasError: Bool) {
+    // A read error could be a genuinely corrupt stream; only wait for an
+    // update if the file is still being actively written. A clean EOF short
+    // of the duration is always an incomplete download → wait regardless.
+    if wasError, !fileIsRecentlyActive(currentFileURL?.path ?? currentFilePath ?? "") {
+      state = .failed
+      errorMessage = "Playback was interrupted by a read error."
+      return
+    }
+    beginWaitingForFileUpdate(at: position)
+  }
+
+  /// Enters the wait-for-file-update flow: keeps the last frame on screen and
+  /// the file's scoped access held, publishes the Waiting flag, and starts a
+  /// 2 s throttled observer that retries playback when the file changes.
+  private func beginWaitingForFileUpdate(at position: Double) {
+    guard let url = currentFileURL else { return }
+    isWaitingForFileUpdate = true
+    waitingResumePosition = max(0, position)
+    lastFileSignature = fileSignature(of: url)
+    startFileUpdateTimer()
+    NSLog("[Native] waiting for file update at %.3f", position)
+  }
+
+  private func startFileUpdateTimer() {
+    fileUpdateTimer?.invalidate()
+    let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
+      Task { @MainActor in self?.checkFileForUpdate() }
+    }
+    timer.tolerance = 1.0
+    RunLoop.main.add(timer, forMode: .common)
+    fileUpdateTimer = timer
+  }
+
+  /// One 2 s tick: if the file on disk changed since the last check, retry
+  /// playback from the preserved position. No change → keep waiting.
+  private func checkFileForUpdate() {
+    guard isWaitingForFileUpdate, let url = currentFileURL else { return }
+    guard let last = lastFileSignature, let current = fileSignature(of: url) else { return }
+    guard current != last else { return }
+    lastFileSignature = current
+    let resume = waitingResumePosition ?? 0
+    stopWaitingForFileUpdate()
+    NSLog("[Native] file updated — retrying playback at %.3f", resume)
+    Task { [weak self] in
+      do {
+        try await self?.openInternal(url, resumeOverride: resume)
+      } catch {
+        // Still not playable (partial data); go back to waiting.
+        self?.beginWaitingForFileUpdate(at: resume)
+      }
+    }
+  }
+
+  /// Cancels any in-flight file-update wait (opening/stopping a file, or a
+  /// successful retry). Idempotent. Keeps the last frame; only the Waiting
+  /// flag + timer are torn down.
+  private func stopWaitingForFileUpdate() {
+    isWaitingForFileUpdate = false
+    waitingResumePosition = nil
+    lastFileSignature = nil
+    fileUpdateTimer?.invalidate()
+    fileUpdateTimer = nil
+  }
+
+  /// (size, mtime) signature of the file, or nil when it is gone/unreadable.
+  /// mtime is the key growth signal: downloaders that reserve space then
+  /// write keep `size` constant while mtime moves as content lands.
+  private func fileSignature(of url: URL) -> FileSignature? {
+    guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+      return nil
+    }
+    let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+    return FileSignature(size: size, mtime: attrs[.modificationDate] as? Date)
+  }
+
+  /// True when the file was modified within the last 30 s — i.e. a downloader
+  /// is actively writing it (vs a static, genuinely corrupt file). Used to
+  /// avoid waiting forever on a file that will never grow.
+  private func fileIsRecentlyActive(_ path: String) -> Bool {
+    guard !path.isEmpty,
+      let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+      let mtime = attrs[.modificationDate] as? Date
+    else { return false }
+    return Date.now.timeIntervalSince(mtime) < 30
+  }
+
   private func nativeErrorString(_ error: Error) -> String {
     switch error {
     case NativePlayerError.unsupportedVideoCodec(let c): return "Unsupported video codec: \(c)"
@@ -384,4 +530,14 @@ import MediaPlayerCDemux
       }
     }
   }
+}
+
+/// A file's (size, modificationDate) snapshot, used to detect a
+/// still-downloading file for the partial-playback retry. Downloaders that
+/// reserve space then write keep `size` fixed while `mtime` moves as content
+/// is written — so `mtime` is the primary update signal; size is a cheap
+/// extra field that catches the non-reserved, streamed-append case too.
+private struct FileSignature: Equatable {
+  let size: Int64
+  let mtime: Date?
 }

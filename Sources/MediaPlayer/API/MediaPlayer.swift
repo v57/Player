@@ -53,6 +53,11 @@ public struct PlayerChapter: Equatable, Sendable {
   /// User-facing error from the last failed operation, nil when healthy.
   var errorMessage: String? { get set }
 
+  /// True while playback is paused waiting for a still-downloading file to
+  /// update (the UI shows a "Waiting" badge). The engine observes the file
+  /// (throttled to once per 2 s) and retries automatically when it changes.
+  var isWaitingForFileUpdate: Bool { get }
+
   // MARK: - Tracks
 
   var videoTracks: [MediaTrack] { get }

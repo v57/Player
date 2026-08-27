@@ -53,6 +53,7 @@ import Foundation
   public var subtitleTracks: [MediaTrack] { engine.subtitleTracks }
   public var audioTrackID: Int? { engine.audioTrackID }
   public var subtitleTrackID: Int? { engine.subtitleTrackID }
+  public var isWaitingForFileUpdate: Bool { engine.isWaitingForFileUpdate }
   public var enhancementMode: AudioEnhancementMode {
     get { engine.enhancementMode }
     set { engine.enhancementMode = newValue }

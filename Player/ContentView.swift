@@ -26,6 +26,11 @@ struct ContentView: View {
         if player.fileName != nil, uiState.controlsVisible {
           TimelineBar(player: player).transition(.blurReplace)
         }
+      }.overlay(alignment: .topLeading) {
+        // Playback hit the end of a still-downloading file; the engine is
+        // waiting for it to grow and will retry. Shown while that wait is
+        // active, in the top-leading corner above the video.
+        if player.isWaitingForFileUpdate { waitingBadge }
       }.overlay { if isDropTargeted { dropTargetOverlay } }.onHover { uiState.hovering = $0 }
       .animation(.easeInOut(duration: 0.2), value: uiState.hovering).animation(
         .easeInOut(duration: 0.2), value: uiState.controlsHidden
@@ -173,6 +178,13 @@ struct ContentView: View {
   private static let extraVideoExtensions: Set<String> = [
     "mkv", "vob", "divx", "asf", "rmvb", "m2v",
   ]
+
+  /// Red "Waiting" capsule shown in the top-leading corner while the engine
+  /// waits for a still-downloading file to update.
+  private var waitingBadge: some View {
+    Text("Waiting")
+      .padding(.horizontal, 12).padding(.vertical, 4).background(.red, in: .capsule).padding()
+  }
 
   /// Full-window drop highlight, shown while a file drag hovers over the
   /// window: dim, accent stroke, and a centered label.
