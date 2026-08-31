@@ -8,12 +8,10 @@
 
 /* Begin PBXBuildFile section */
 		267577EF3037555800FB9989 /* MediaPlayer in Frameworks */ = {isa = PBXBuildFile; productRef = 267577EE3037555800FB9989 /* MediaPlayer */; };
-		26B6F1BB30338054003711C9 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 26B6F1BA30338054003711C9 /* AppIcon.icon */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		000000000000000000000120 /* Player.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Player.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		26B6F1BA30338054003711C9 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -50,7 +48,6 @@
 		000000000000000000000001 = {
 			isa = PBXGroup;
 			children = (
-				26B6F1BA30338054003711C9 /* AppIcon.icon */,
 				000000000000000000000010 /* Player */,
 				000000000000000000000020 /* Products */,
 			);
@@ -130,7 +127,6 @@
 		000000000000000140000000 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
-				26B6F1BB30338054003711C9 /* AppIcon.icon in Resources */,
 			);
 		};
 /* End PBXResourcesBuildPhase section */

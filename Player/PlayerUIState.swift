@@ -160,14 +160,18 @@ import MediaPlayer
 
   // MARK: - Auto-hide
 
-  /// Called on every pointer/keyboard event in the window: re-shows the
-  /// controls and restarts the idle timer that hides them (and the cursor
-  /// in fullscreen) while playing.
+  /// Called on every pointer/keyboard event delivered to the app: re-shows
+  /// the controls and restarts the idle timer that hides them (and the
+  /// cursor in fullscreen) while playing.
   func noteInteraction(event: NSEvent? = nil) {
-    if let event, event.type == .mouseMoved, event.window == nil {
-      // Not our window (e.g. another app's); ignore.
-      return
-    }
+    // NOTE: a LOCAL event monitor only ever sees THIS app's events, so a
+    // mouseMoved with `event.window == nil` is not "another app" — it is
+    // exactly the system menu / menu-bar tracking case (the menu runs in a
+    // separate tracking window an NSView won't see as its own). Counting
+    // those as interaction keeps the controls and cursor up while the user
+    // navigates a menu, instead of the idle timer firing mid-menu and (after
+    // the menu closes) leaving the cursor visible while the controls are
+    // hidden.
     showControls()
     restartIdleTimer()
   }
@@ -185,7 +189,15 @@ import MediaPlayer
 
   private func restartIdleTimer() {
     idleTimer?.invalidate()
-    let timer = Timer(timeInterval: idleHideDelay, repeats: false) { [weak self] _ in
+    // REPEATING (not one-shot) so the cursor re-hide is self-correcting:
+    // NSCursor.setHiddenUntilMouseMoves is ONE-SHOT — the system re-shows
+    // the cursor on any mouse movement, including ones that close a menu
+    // without reaching this monitor as a tracked interaction. A one-shot
+    // timer that already fired cannot re-hide it, so a stray cursor stays
+    // visible until the next interaction. Firing every idleHideDelay (and
+    // reset on each interaction) re-arms the hide each tick even if the
+    // overlay is already hidden.
+    let timer = Timer(timeInterval: idleHideDelay, repeats: true) { [weak self] _ in
       Task { @MainActor in self?.hideControlsIfPlaying() }
     }
     timer.tolerance = 0.1
@@ -196,22 +208,36 @@ import MediaPlayer
   /// Hides the controls overlay (and the cursor in fullscreen) — but only
   /// while media is actually playing. Pausing or stopping re-shows them.
   private func hideControlsIfPlaying() {
-    guard !controlsHidden else { return }
     guard player?.isPlaying == true else { return }
-    controlsHidden = true
-    // Cursor hides in fullscreen only; windowed mode keeps the pointer
-    // available while the overlay is hidden.
+    // Cursor hide stays INDEPENDENT of the overlay transition. The overlay
+    // only needs to flip once (below), but NSCursor.setHiddenUntilMouseMoves
+    // is one-shot and cleared by the system on any mouse move — one that may
+    // not reach this monitor (closing a system menu re-shows the cursor
+    // without an event we track). Re-arming it on every idle tick while
+    // playing keeps the hidden state correct after such a move; gating on
+    // `!controlsHidden` would leave a re-shown cursor visible forever once
+    // the overlay is already hidden.
     if isFullScreen { setCursorHidden(true) }
+    guard !controlsHidden else { return }
+    controlsHidden = true
   }
 
-  /// Applies the cursor hidden state. The old tracking-area hook in the
-  /// video view never fires (the library view has no tracking area), so
-  /// the cursor stayed visible after the overlay hid — this is the actual
-  /// hide. setHiddenUntilMouseMoves re-shows the cursor on the next mouse
-  /// movement; showControls forces it back on any interaction.
+  /// Applies the cursor hidden state. Hiding ALWAYS re-arms the one-shot
+  /// `NSCursor.setHiddenUntilMouseMoves(true)` even if our `cursorHidden`
+  /// bookkeeping says already-hidden — the system re-shows the cursor on any
+  /// mouse move we may not have tracked (menu close), so the bool can be
+  /// stale-true while the cursor is actually visible; re-arming is idempotent
+  /// when it really is hidden. Showing cancels the hide (setHiddenUntilMouseMoves
+  /// only adds the hide-until-move behavior, so the next move is what reveals;
+  /// showControls runs off an interaction, so the cursor is already shown).
   private func setCursorHidden(_ hidden: Bool) {
-    guard cursorHidden != hidden else { return }
-    cursorHidden = hidden
-    NSCursor.setHiddenUntilMouseMoves(hidden)
+    if hidden {
+      cursorHidden = true
+      NSCursor.setHiddenUntilMouseMoves(true)
+    } else {
+      guard cursorHidden else { return }
+      cursorHidden = false
+      NSCursor.setHiddenUntilMouseMoves(false)
+    }
   }
 }

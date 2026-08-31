@@ -173,9 +173,9 @@ import MediaPlayerCDemux
     saveCurrentPosition()
   }
 
-  public func seek(to seconds: Double, exact: Bool) { controller.seek(to: seconds) }
+  public func seek(to seconds: Double, exact: Bool) { issueSeek(to: seconds) }
 
-  public func seekRelative(_ seconds: Double) { controller.seek(to: max(0, position + seconds)) }
+  public func seekRelative(_ seconds: Double) { issueSeek(to: max(0, position + seconds)) }
 
   /// Chapter skipping: seeks to the nearest chapter boundary after
   /// (direction > 0) or before (direction < 0) the current position.
@@ -187,21 +187,36 @@ import MediaPlayerCDemux
     let pos = position
     if direction > 0 {
       guard let next = chapters.first(where: { $0.startTime > pos + 1.0 }) else { return }
-      controller.seek(to: next.startTime)
+      issueSeek(to: next.startTime)
     } else {
       guard let prev = chapters.last(where: { $0.startTime < pos - 1.0 }) else { return }
-      controller.seek(to: prev.startTime)
+      issueSeek(to: prev.startTime)
     }
+  }
+
+  /// Single funnel for every seek (arrow-arrow, slider scrub, chapter skip,
+  /// seekRelative). Submits to the controller AND, while paused, pushes the
+  /// target onto the published `position`: `refreshFromController` early-
+  /// returns when not playing and the position timer is stopped, so without
+  /// this the UI timeline would freeze at the pre-seek value even though the
+  /// engine seeked — a pause-time seek would appear to "not change the
+  /// timeline." While playing the 5 Hz poll corrects `position` next tick.
+  private func issueSeek(to seconds: Double) {
+    let clamped = duration > 0 ? min(max(seconds, 0), duration) : max(seconds, 0)
+    controller.seek(to: clamped)
+    if !isPlaying, duration > 0, clamped != position { position = clamped }
   }
 
   public func stop() {
     saveCurrentPosition()
+    stopWaitingForFileUpdate()
     controller.stop()
     releaseScopedAccess()
     positionTimer?.invalidate()
     positionTimer = nil
     fileName = nil
     currentFilePath = nil
+    currentFileURL = nil
     position = 0
     duration = 0
     isPlaying = false

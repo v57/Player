@@ -958,9 +958,66 @@ public final class PlaybackController {
       audioClockOffset = seconds
       // A seek while paused moves the frozen position, so the timer
       // reflects the new target and resume resumes there.
-      if isPaused { pausedClock = seconds }
+      if isPaused {
+        pausedClock = seconds
+        // Present the frame at the new position so a pause-time seek
+        // (arrow-arrow skip, slider scrub) shows it immediately instead of
+        // freezing on the old frame until resume. Decode + present the
+        // nearest frame at/after the target and hold it.
+        presentPausedPreview(target: seconds, demuxer: demuxer)
+      }
       stateChanged()
     } catch { stateChanged() }
+  }
+
+  /// Decode + present the single video frame at/after `target` while paused,
+  /// so a pause-time seek (arrow-arrow skip, slider scrub) shows the frame at
+  /// the new position immediately instead of freezing on the old frame until
+  /// resume. Runs on the pipeline queue after a paused seek: VT decodes
+  /// asynchronously on its own thread, so we feed video packets and poll the
+  /// collected queue for a frame at/after the target (or EOF/timeout). Every
+  /// poll PRUNES pre-target frames so the queue stays shallow on long-GOP
+  /// files (otherwise decoding the keyframe->target window piles up a whole
+  /// GOP of decoded frames before the target appears). Leaves the frame held
+  /// by every sink; resume re-reads from pausedClock-0.05.
+  private func presentPausedPreview(target: Double, demuxer: FFmpegDemuxer) {
+    let deadline = CACurrentMediaTime() + 1.5
+    while CACurrentMediaTime() < deadline {
+      videoQueueLock.lock()
+      // Drop pre-target frames each poll (keeps the queue bounded) and look
+      // for a candidate at/after the target.
+      videoQueue.removeAll { $0.pts < target - displaySlack }
+      videoQueue.sort { $0.pts < $1.pts }
+      var frame: NativeVideoFrame?
+      if let first = videoQueue.first, first.pts >= target - displaySlack {
+        frame = first
+        videoQueue.removeFirst()
+      }
+      videoQueueLock.unlock()
+      if let frame {
+        presentPausedFrame(frame)
+        // Clear any extra decoded frames so resume re-reads the GOP cleanly
+        // (no stale-burst presentation at the target).
+        videoQueueLock.lock()
+        videoQueue.removeAll()
+        videoQueueLock.unlock()
+        return
+      }
+      // Keep decoding forward from the keyframe until the target frame lands.
+      guard let pkt = try? demuxer.readPacket() else { return }  // EOF before target
+      if pkt.streamID == videoStreamIndex { feedVideoPacket(pkt) }
+      usleep(1000)
+    }
+  }
+
+  /// Present one frame to every sink (MainActor hop), bypassing the isPlaying
+  /// gate so a paused seek previews the target frame. Updates lastPresentedPTS
+  /// so a later resume continues from this frame with no pre-target replay.
+  private func presentPausedFrame(_ frame: NativeVideoFrame) {
+    lastPresentedPTS = frame.pts
+    presentedFrames += 1
+    let f = frame
+    for s in snapshotSinks() { Task { @MainActor in s.present(frame: f) } }
   }
 
   /// Teardown shared by stop() (idle path) and the loop's .stop command.
