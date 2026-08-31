@@ -383,7 +383,16 @@ public final class PlaybackController {
     }
 
     guard let video else { throw NativePlayerError.unsupportedVideoCodec("no video track") }
-    guard video.codecName == "h264" || video.codecID == 27 else {
+    // Supported video codecs: VideoToolbox decodes H.264 (AVC) and HEVC
+    // (H.265) natively on hardware. H.264 uses avcC extradata + the
+    // H264ParameterSets format-description builder; HEVC uses hvcC extradata
+    // + the HEVCParameterSets builder (VPS+SPS+PPS). Demux/schedule/present
+    // is codec-agnostic, so only the gate and the format-description path
+    // branch on codec.
+    let videoCodec = video.codecName.lowercased()
+    let isH264 = videoCodec == "h264" || video.codecID == 27
+    let isHEVC = videoCodec == "hevc" || videoCodec == "h265" || videoCodec == "hev1"
+    guard isH264 || isHEVC else {
       throw NativePlayerError.unsupportedVideoCodec(video.codecName)
     }
     // Supported audio codecs (decoders compiled into the FFmpeg build):
@@ -415,57 +424,162 @@ public final class PlaybackController {
   // MARK: - Video decoder setup
 
   private func setupVideoToolbox(demuxer: FFmpegDemuxer, video: NativeTrackInfo) throws {
-    var avcc: UnsafePointer<UInt8>?
-    var avccSize: Int = 0
+    guard let avccPointer = fetchExtradata(demuxer: demuxer, video: video) else {
+      throw NativePlayerError.videoDecoderFailed
+    }
+    let bytes = avccPointer
+    let isHEVC = Self.isHevcCodec(video)
+    if isHEVC {
+      // HEVC (H.265): hvcC (HEVCDecoderConfigurationRecord). Fixed header is
+      // 23 bytes; then numOfArrays (byte 22); each array = 1B array_completeness
+      // + 6B NAL_unit_type, 2B numNalus, then per-NAL 2B length + NAL. We
+      // collect VPS (32), SPS (33) and PPS (34) and feed them to
+      // CMVideoFormatDescriptionCreateFromHEVCParameterSets, which requires at
+      // least one of each (VPS+SPS+PPS).
+      guard let hvcc = parseHVCC(bytes) else { throw NativePlayerError.videoDecoderFailed }
+      var vps: [[UInt8]] = []
+      var sps: [[UInt8]] = []
+      var pps: [[UInt8]] = []
+      for (type, nal) in hvcc.nals {
+        switch type {
+        case 32: vps.append(nal)
+        case 33: sps.append(nal)
+        case 34: pps.append(nal)
+        default: break
+        }
+      }
+      guard !vps.isEmpty, !sps.isEmpty, !pps.isEmpty else {
+        throw NativePlayerError.videoDecoderFailed
+      }
+      let ordered = vps + sps + pps
+      var ptrs: [UnsafePointer<UInt8>] = []
+      var sizes: [Int] = []
+      for n in ordered {
+        n.withUnsafeBufferPointer {
+          ptrs.append($0.baseAddress!)
+          sizes.append(n.count)
+        }
+      }
+      var fd: CMVideoFormatDescription?
+      let status = CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+        allocator: kCFAllocatorDefault, parameterSetCount: ptrs.count,
+        parameterSetPointers: &ptrs, parameterSetSizes: &sizes,
+        nalUnitHeaderLength: Int32(hvcc.lengthSize), extensions: nil,
+        formatDescriptionOut: &fd)
+      guard status == noErr, let fd else { throw NativePlayerError.videoDecoderFailed }
+      vtFormatDesc = fd
+      try setupVTCommon(formatDesc: fd)
+    } else {
+      // H.264: avcC (AVCDecoderConfigurationRecord).
+      let avcc = parseAVCC(bytes)
+      guard !avcc.sps.isEmpty, !avcc.pps.isEmpty else {
+        throw NativePlayerError.videoDecoderFailed
+      }
+      var ptrs: [UnsafePointer<UInt8>] = []
+      var sizes: [Int] = []
+      for n in avcc.sps + avcc.pps {
+        n.withUnsafeBufferPointer {
+          ptrs.append($0.baseAddress!)
+          sizes.append(n.count)
+        }
+      }
+      var fd: CMVideoFormatDescription?
+      let status = CMVideoFormatDescriptionCreateFromH264ParameterSets(
+        allocator: kCFAllocatorDefault, parameterSetCount: ptrs.count,
+        parameterSetPointers: &ptrs, parameterSetSizes: &sizes,
+        nalUnitHeaderLength: Int32(avcc.lengthSize), formatDescriptionOut: &fd)
+      guard status == noErr, let fd else { throw NativePlayerError.videoDecoderFailed }
+      vtFormatDesc = fd
+      try setupVTCommon(formatDesc: fd)
+    }
+  }
+
+  /// Fetches the video stream's extradata as a [UInt8] copy (owned by us).
+  private func fetchExtradata(demuxer: FFmpegDemuxer, video: NativeTrackInfo) -> [UInt8]? {
+    var ptr: UnsafePointer<UInt8>?
+    var size: Int = 0
     guard
-      media_get_track_extradata(demuxerHandle(demuxer), Int32(video.id), &avcc, &avccSize)
-        == MEDIA_RESULT_OK, let avcc, avccSize > 0
-    else { throw NativePlayerError.videoDecoderFailed }
-    let bytes = [UInt8](UnsafeBufferPointer(start: avcc, count: avccSize))
-    let lengthSize = Int(bytes[4] & 0x03) + 1
-    let numSPS = Int(bytes[5] & 0x1F)
-    var sps: [[UInt8]] = []
+      media_get_track_extradata(demuxerHandle(demuxer), Int32(video.id), &ptr, &size)
+        == MEDIA_RESULT_OK, let ptr, size > 0
+    else { return nil }
+    return [UInt8](UnsafeBufferPointer(start: ptr, count: size))
+  }
+
+  /// AVC decoder configuration record (avcC): 1B configVersion, profile/compat/
+  /// level (3B), 1B (lengthSizeMinusOne + numSPS) then per-SPS 2B length + SPS,
+  /// 1B numPPS, per-PPS 2B length + PPS. Returns SPS+PPS (in order) + NAL length
+  /// size, or nil on a malformed record.
+  private struct AVCParameters {
+    let sps: [[UInt8]]
+    let pps: [[UInt8]]
+    let lengthSize: Int
+  }
+
+  private func parseAVCC(_ b: [UInt8]) -> AVCParameters {
+    guard b.count >= 7, b[0] == 1 else { return AVCParameters(sps: [], pps: [], lengthSize: 4) }
+    let lengthSize = Int(b[4] & 0x03) + 1
+    let numSPS = Int(b[5] & 0x1F)
     var off = 6
+    var sps: [[UInt8]] = []
     for _ in 0..<numSPS {
-      let len = (Int(bytes[off]) << 8) | Int(bytes[off + 1])
+      guard off + 2 <= b.count else { return AVCParameters(sps: [], pps: [], lengthSize: lengthSize) }
+      let len = (Int(b[off]) << 8) | Int(b[off + 1])
       off += 2
-      sps.append(Array(bytes[off..<(off + len)]))
+      guard off + len <= b.count else { return AVCParameters(sps: [], pps: [], lengthSize: lengthSize) }
+      sps.append(Array(b[off..<(off + len)]))
       off += len
     }
-    let numPPS = Int(bytes[off])
-    off += 1
+    guard off < b.count else { return AVCParameters(sps: sps, pps: [], lengthSize: lengthSize) }
+    let numPPS = Int(b[off]); off += 1
     var pps: [[UInt8]] = []
     for _ in 0..<numPPS {
-      let len = (Int(bytes[off]) << 8) | Int(bytes[off + 1])
+      guard off + 2 <= b.count else { return AVCParameters(sps: sps, pps: pps, lengthSize: lengthSize) }
+      let len = (Int(b[off]) << 8) | Int(b[off + 1])
       off += 2
-      pps.append(Array(bytes[off..<(off + len)]))
+      guard off + len <= b.count else { return AVCParameters(sps: sps, pps: pps, lengthSize: lengthSize) }
+      pps.append(Array(b[off..<(off + len)]))
       off += len
     }
-    guard !sps.isEmpty, !pps.isEmpty else { throw NativePlayerError.videoDecoderFailed }
+    return AVCParameters(sps: sps, pps: pps, lengthSize: lengthSize)
+  }
 
-    var allPtrs: [UnsafePointer<UInt8>] = []
-    var allSizes: [Int] = []
-    for s in sps {
-      s.withUnsafeBufferPointer {
-        allPtrs.append($0.baseAddress!)
-        allSizes.append(s.count)
+  /// HEVC decoder configuration record (hvcC): fixed 23-byte header, then
+  /// numOfArrays (1B), each array = 1B (array_completeness + NAL_unit_type),
+  /// 2B numNalus, per-NAL 2B length + NAL. Returns the NALs (type + data) and
+  /// the NAL length size, or nil on a malformed record.
+  private struct HVCCParameters {
+    let nals: [(type: Int, data: [UInt8])]
+    let lengthSize: Int
+  }
+
+  private func parseHVCC(_ b: [UInt8]) -> HVCCParameters? {
+    guard b.count >= 24, b[0] == 1 else { return nil }
+    let lengthSize = Int(b[21] & 0x03) + 1
+    let numArrays = Int(b[22])
+    var off = 23
+    var nals: [(type: Int, data: [UInt8])] = []
+    for _ in 0..<numArrays {
+      guard off < b.count else { return nil }
+      let type = Int(b[off] & 0x3F)
+      off += 1
+      guard off + 2 <= b.count else { return nil }
+      let numNalus = (Int(b[off]) << 8) | Int(b[off + 1])
+      off += 2
+      for _ in 0..<numNalus {
+        guard off + 2 <= b.count else { return nil }
+        let len = (Int(b[off]) << 8) | Int(b[off + 1])
+        off += 2
+        guard off + len <= b.count else { return nil }
+        nals.append((type, Array(b[off..<(off + len)])))
+        off += len
       }
     }
-    for p in pps {
-      p.withUnsafeBufferPointer {
-        allPtrs.append($0.baseAddress!)
-        allSizes.append(p.count)
-      }
-    }
+    return HVCCParameters(nals: nals, lengthSize: lengthSize)
+  }
 
-    var fd: CMVideoFormatDescription?
-    let fds = CMVideoFormatDescriptionCreateFromH264ParameterSets(
-      allocator: kCFAllocatorDefault, parameterSetCount: allPtrs.count,
-      parameterSetPointers: &allPtrs, parameterSetSizes: &allSizes,
-      nalUnitHeaderLength: Int32(lengthSize), formatDescriptionOut: &fd)
-    guard fds == noErr, let fd else { throw NativePlayerError.videoDecoderFailed }
-    vtFormatDesc = fd
-
+  /// Session creation shared by H.264 and HEVC: collector box, output callback,
+  /// and a VTDecompressionSession sized to the format description's coded dims.
+  private func setupVTCommon(formatDesc fd: CMVideoFormatDescription) throws {
     // Collector box: VT callback fills the queue on VT's thread.
     let box = VideoCollectorBox { [weak self] frame in
       guard let self else { return }
@@ -487,11 +601,13 @@ public final class PlaybackController {
 
     var session: VTDecompressionSession?
     // Output pixel buffers at the CODEC's native dimensions (from the
-    // format description). Previously hardcoded 1920x816 (the old sample's
-    // size) — VideoToolbox then SCALED every stream to 1920x816, which
-    // squeezed 16:9 content into a 2.35:1 aspect (report: video.mkv
-    // "opens as 21/9 with squeezed image"). Coded dims keep the rendered
-    // aspect correct for every file.
+    // format description). Previously hardcoded 1920x816 — VideoToolbox then
+    // SCALED every stream to 1920x816, which squeezed 16:9 content into a
+    // 2.35:1 aspect. Coded dims keep the rendered aspect correct for every
+    // file, HEVC or H.264. HEVC 10-bit sources are requested as 8-bit limited
+    // range (VideoToolbox downconverts); the Metal shader's 8-bit BT.709 math
+    // applies unchanged. To preserve 10-bit later, request
+    // 420YpCbCr10BiPlanarVideoRange and update the shader to 1023-based math.
     let codedDims = CMVideoFormatDescriptionGetDimensions(fd)
     let attrs: [String: Any] = [
       kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
@@ -505,6 +621,14 @@ public final class PlaybackController {
     guard vts == noErr, let session else { throw NativePlayerError.videoDecoderFailed }
     vtSession = session
     videoCollectorBox = box
+  }
+
+  /// True for HEVC/H.265 codecs (codec name hevc/h265/hev1, or AVCodecID 175);
+  /// VideoToolbox decodes HEVC natively, so these are the only two video codec
+  /// families the native engine accepts.
+  static func isHevcCodec(_ video: NativeTrackInfo) -> Bool {
+    let n = video.codecName.lowercased()
+    return n == "hevc" || n == "h265" || n == "hev1" || video.codecID == 175
   }
 
   private func demuxerHandle(_ d: FFmpegDemuxer) -> UnsafeMutablePointer<MediaDemuxer>? {
