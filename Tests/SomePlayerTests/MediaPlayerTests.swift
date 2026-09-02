@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import MediaPlayer
+@testable import SomePlayer
 
 final class MediaTimeTests: XCTestCase {
   func testDisplayStringFormats() {

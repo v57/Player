@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import MediaPlayer
+@testable import SomePlayer
 
 final class ChannelRoleTests: XCTestCase {
   /// AV_CH_LAYOUT_5POINT1 (5.1 rear) = 0x3F: FL, FR, FC, LFE, BL, BR.

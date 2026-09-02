@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import MediaPlayer
+@testable import SomePlayer
 
 final class EnhancementPresetTests: XCTestCase {
   // MARK: - Pinned preset values (build expected structs from the same literals as the spec)

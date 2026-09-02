@@ -1,5 +1,5 @@
 import Foundation
-import MediaPlayer
+import SomePlayer
 
 /// Persists the user's dialogue-enhancement mode.
 ///

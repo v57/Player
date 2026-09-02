@@ -3,7 +3,7 @@ import Accelerate
 import CoreMedia
 import CoreVideo
 import Foundation
-import MediaPlayerCDemux
+import SomePlayerCDemux
 import VideoToolbox
 
 /// One decoded video frame ready for presentation.
@@ -1421,7 +1421,7 @@ public final class PlaybackController {
     return CACurrentMediaTime() - startMonotonic
   }
 
-  /// MainActor-safe clock read (see NativeMediaPlayer.refreshFromController).
+  /// MainActor-safe clock read (see NativeSomePlayer.refreshFromController).
   func currentClockSafe() -> Double { currentClock() }
 
   // MARK: - Subtitles (SRT Phase A)

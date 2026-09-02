@@ -1,11 +1,11 @@
 import Combine
 import Foundation
-import MediaPlayer
+import SomePlayer
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-  @EnvironmentObject private var player: MediaPlayerBox
+  @EnvironmentObject private var player: SomePlayerBox
   @EnvironmentObject private var uiState: PlayerUIState
 
   /// True while a file drag hovers over the window; drives the drop
@@ -79,7 +79,7 @@ struct ContentView: View {
   /// decoded frames into. Cursor auto-hide in fullscreen is owned by
   /// PlayerUIState (NSCursor.setHiddenUntilMouseMoves from the window
   /// event monitor) — the view itself does no cursor management.
-  private var videoSurface: some View { MediaPlayerView(player: player) }
+  private var videoSurface: some View { SomePlayerView(player: player) }
   private var emptyState: some View {
     let recent = recentVideos
     return VStack(spacing: 16) {

@@ -16,16 +16,16 @@ public struct PlayerChapter: Equatable, Sendable {
 /// `@Published` and is driven from the main actor. `objectWillChange` is
 /// pinned to the concrete `ObservableObjectPublisher` (rather than the
 /// associated-type form) so the publisher can be forwarded through the
-/// existential — e.g. by `MediaPlayerBox`.
+/// existential — e.g. by `SomePlayerBox`.
 ///
 /// NOTE: views CANNOT hold this as `@EnvironmentObject var player: any
-/// MediaPlayer` — an existential type cannot conform to `ObservableObject`
+/// SomePlayer` — an existential type cannot conform to `ObservableObject`
 /// (#ProtocolTypeNonConformance; probed with swiftc -typecheck). The app
-/// injects the concrete `MediaPlayerBox` instead, which forwards this whole
+/// injects the concrete `SomePlayerBox` instead, which forwards this whole
 /// surface 1:1, so views never touch an engine type.
-@MainActor public protocol MediaPlayer: ObservableObject, AnyObject {
+@MainActor public protocol SomePlayer: ObservableObject, AnyObject {
   /// Re-published on every engine state change. Pinned concrete type so
-  /// forwarding through `any MediaPlayer` compiles.
+  /// forwarding through `any SomePlayer` compiles.
   var objectWillChange: ObservableObjectPublisher { get }
 
   // MARK: - State machine
@@ -91,6 +91,12 @@ public struct PlayerChapter: Equatable, Sendable {
   /// (positive direction) the current position. No-op with no chapters.
   func skipChapter(_ direction: Int)
   func stop()
+  /// Advances to the next/previous media file in the SAME directory as the
+  /// current file (sorted by filename, wrapping around). No-op when the
+  /// current file has no siblings (≤ 1 file in the directory) or when
+  /// nothing is open. Used by the Next/Previous media keys.
+  func nextTrack()
+  func previousTrack()
   func selectAudioTrack(_ id: Int)
   /// nil turns subtitles off.
   func selectSubtitleTrack(_ id: Int?)

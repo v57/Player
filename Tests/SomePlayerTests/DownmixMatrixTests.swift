@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import MediaPlayer
+@testable import SomePlayer
 
 final class DownmixMatrixTests: XCTestCase {
   private let fiveDotOneSide: [ChannelRole] = [.frontL, .frontR, .center, .lfe, .sideL, .sideR]

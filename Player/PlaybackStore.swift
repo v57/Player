@@ -1,5 +1,5 @@
 import Foundation
-import MediaPlayer
+import SomePlayer
 import SQLite3
 import SwiftData
 

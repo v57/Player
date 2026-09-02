@@ -11,21 +11,21 @@ import SwiftUI
 /// The app passes its boxed player (the same object it injects as
 /// @EnvironmentObject); the view conditional-casts to the native engine to
 /// register the sink — mirroring the old app-side NativeVideoView.
-public struct MediaPlayerView: NSViewRepresentable {
-  @ObservedObject public var player: MediaPlayerBox
+public struct SomePlayerView: NSViewRepresentable {
+  @ObservedObject public var player: SomePlayerBox
 
-  public init(player: MediaPlayerBox) { self.player = player }
+  public init(player: SomePlayerBox) { self.player = player }
 
   public func makeNSView(context: Context) -> MediaMetalView {
     let view = MediaMetalView(frame: .zero)
     view.player = player
-    if let engine = player.engine as? NativeMediaPlayer { engine.registerSink(view) }
+    if let engine = player.engine as? NativeSomePlayer { engine.registerSink(view) }
     return view
   }
 
   public func updateNSView(_ nsView: MediaMetalView, context: Context) {
     nsView.player = player
-    if let engine = player.engine as? NativeMediaPlayer { engine.registerSink(nsView) }
+    if let engine = player.engine as? NativeSomePlayer { engine.registerSink(nsView) }
   }
 
   public static func dismantleNSView(_ nsView: MediaMetalView, coordinator: ()) {
@@ -41,7 +41,7 @@ public final class MediaMetalView: NSView, VideoFrameSink {
   /// Subtitle overlay (SRT Phase A): CATextLayer above the video.
   private let subtitleLayer = CATextLayer()
   /// The boxed player (set by the SwiftUI wrapper) for key/click transport.
-  weak var player: MediaPlayerBox?
+  weak var player: SomePlayerBox?
   // TEMP DIAGNOSTICS
   private var diagFirstPresent = false
   private var diagRendererNil = 0
@@ -134,7 +134,7 @@ public final class MediaMetalView: NSView, VideoFrameSink {
   /// Reads the active subtitle cue from the native engine and updates the
   /// overlay. Called on every presented frame (MainActor).
   private func updateSubtitleOverlay() {
-    guard let cue = (player?.engine as? NativeMediaPlayer)?.activeSubtitleCue, !cue.isEmpty else {
+    guard let cue = (player?.engine as? NativeSomePlayer)?.activeSubtitleCue, !cue.isEmpty else {
       if !subtitleLayer.isHidden {
         subtitleLayer.string = nil
         subtitleLayer.isHidden = true

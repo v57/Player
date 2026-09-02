@@ -1,7 +1,7 @@
 import AVFoundation
 import XCTest
 
-@testable import MediaPlayer
+@testable import SomePlayer
 
 /// Offline (manual rendering) tests for the dialogue-enhancement AU chain.
 ///

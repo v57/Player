@@ -1,16 +1,16 @@
 import AppKit
 import Combine
 import Foundation
-import MediaPlayerCDemux
+import SomePlayerCDemux
 
-/// The native engine behind the MediaPlayer protocol: libavformat demux +
+/// The native engine behind the SomePlayer protocol: libavformat demux +
 /// VideoToolbox + libavcodec dca + AVAudioEngine + Metal (via VideoFrameSink).
 ///
 /// Owns a PlaybackController and mirrors its state onto the @Published
 /// surface the UI consumes. Persistence (resume + track picks) goes
 /// through PlaybackStore (one shared SwiftData container).
-@MainActor public final class NativeMediaPlayer: MediaPlayer {
-  static let shared = NativeMediaPlayer()
+@MainActor public final class NativeSomePlayer: SomePlayer {
+  static let shared = NativeSomePlayer()
 
   /// Persistence goes through the PlayerPersistence seam — the app
   /// injects its SwiftData-backed PlaybackStore; the library never
@@ -191,6 +191,65 @@ import MediaPlayerCDemux
     } else {
       guard let prev = chapters.last(where: { $0.startTime < pos - 1.0 }) else { return }
       issueSeek(to: prev.startTime)
+    }
+  }
+
+  // MARK: - Media keys (Next / Previous track in directory)
+
+  /// Next media key: advance to the next supported file in the current
+  /// file's directory. `advanceTrack(direction: 1)`.
+  public func nextTrack() { advanceTrack(direction: 1) }
+
+  /// Previous media key: go back to the previous supported file in the
+  /// current file's directory. `advanceTrack(direction: -1)`.
+  public func previousTrack() { advanceTrack(direction: -1) }
+
+  /// The media extensions the player accepts, used to pick siblings for the
+  /// Next/Previous media keys. Matches the app's registered document types
+  /// (mov/mp4/m4v/mkv/webm).
+  private static let videoExtensions: Set<String> = ["mov", "mp4", "m4v", "mkv", "webm"]
+
+  private static func isSupportedVideo(_ url: URL) -> Bool {
+    videoExtensions.contains(url.pathExtension.lowercased())
+  }
+
+  /// Moves to the next/previous sibling of the current file (sorted by
+  /// filename, localized, wrapping around). The sibling is opened through
+  /// the normal `openInternal` path so the sandbox grant, resume policy and
+  /// track picks all behave exactly as if the user had opened it. No-op when
+  /// nothing is open or the directory holds ≤ 1 playable file. Enumerating
+  /// the directory requires read access to it; under the App Sandbox that is
+  /// granted only when the folder is itself accessible to the app (see
+  /// NowPlayingController notes).
+  private func advanceTrack(direction: Int) {
+    guard let current = currentFileURL else { return }
+    let dir = current.deletingLastPathComponent()
+    let files: [URL]
+    do {
+      files =
+        try FileManager.default.contentsOfDirectory(
+          at: dir, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]
+        ).filter { Self.isSupportedVideo($0) }
+        .sorted {
+          $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
+        }
+    } catch {
+      NSLog("[Native] next/previous: cannot enumerate %@ — %@", dir.path, error.localizedDescription)
+      return
+    }
+    guard files.count > 1,
+      let idx = files.firstIndex(where: { $0.standardizedFileURL == current.standardizedFileURL })
+    else {
+      return
+    }
+    let target = files[((idx + direction) % files.count + files.count) % files.count]
+    NSLog("[Native] media key %@ -> %@", direction > 0 ? "next" : "previous", target.lastPathComponent)
+    Task { [weak self] in
+      do {
+        try await self?.openInternal(target, resumeOverride: nil)
+      } catch {
+        self?.errorMessage = "Could not open \(target.lastPathComponent)."
+      }
     }
   }
 

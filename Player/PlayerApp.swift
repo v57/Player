@@ -1,22 +1,30 @@
-import MediaPlayer
+import SomePlayer
 import SwiftUI
 
 @main struct PlayerApp: App {
   /// Quit the app when its last window closes (standard macOS behavior).
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
-  /// The concrete MediaPlayerBox wraps the native engine; views observe the
+  /// The concrete SomePlayerBox wraps the native engine; views observe the
   /// box (an existential cannot be an @EnvironmentObject — probed, see
-  /// MediaPlayerBox). Wave 6 removed the libmpv engine entirely — native is
+  /// SomePlayerBox). Wave 6 removed the libmpv engine entirely — native is
   /// the only engine now (KANBAN).
-  @StateObject private var player: MediaPlayerBox
+  @StateObject private var player: SomePlayerBox
   @StateObject private var uiState: PlayerUIState
 
+  /// Routes the Play/Next/Previous media keys to the player and registers
+  /// it as the macOS Now Playing app (so the keys stop falling through to
+  /// Music). Pure Swift using MPRemoteCommandCenter + MPNowPlayingInfoCenter —
+  /// the engine module was renamed `SomePlayer` so `import SomePlayer` here
+  /// is Apple's framework (see Player/NowPlayingController.swift).
+  /// App-lifetime: created once here.
+  private let nowPlaying: NowPlayingController
+
   init() {
-    let box = MediaPlayerBox(engine: NativeMediaPlayer())
+    let box = SomePlayerBox(engine: NativeSomePlayer())
     // Inject the SwiftData-backed store into the engine's persistence
     // seam (the library never touches SwiftData itself).
-    if let engine = box.engine as? NativeMediaPlayer {
+    if let engine = box.engine as? NativeSomePlayer {
       engine.store = PlaybackStore.shared
       // Restore the user's dialogue-enhancement mode (UserDefaults; the
       // engine stays idle, so the value is stashed and applied at setup).
@@ -33,6 +41,8 @@ import SwiftUI
     }
     _player = StateObject(wrappedValue: box)
     _uiState = StateObject(wrappedValue: PlayerUIState(player: box))
+    // Wire the media keys / Now Playing integration. Weak-holds the box.
+    nowPlaying = NowPlayingController(player: box)
   }
 
   var body: some Scene {

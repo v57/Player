@@ -1,9 +1,9 @@
-import MediaPlayer
+import SomePlayer
 import SwiftUI
 
 /// Bottom timeline: elapsed / total time plus a scrubbing slider.
 struct TimelineBar: View {
-  @ObservedObject var player: MediaPlayerBox
+  @ObservedObject var player: SomePlayerBox
 
   /// Value shown while the user is dragging; the slider only follows
   /// `player.position` when not scrubbing, so the poll timer can't fight

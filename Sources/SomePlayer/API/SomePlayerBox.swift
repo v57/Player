@@ -1,16 +1,16 @@
 import Combine
 import Foundation
 
-/// Concrete `ObservableObject` box around `any MediaPlayer`.
+/// Concrete `ObservableObject` box around `any SomePlayer`.
 ///
-/// `@EnvironmentObject var player: any MediaPlayer` does not compile — an
+/// `@EnvironmentObject var player: any SomePlayer` does not compile — an
 /// existential type cannot conform to `ObservableObject` (#ProtocolType
 /// NonConformance; probed with a swiftc -typecheck test before this file was
 /// written). This box is the documented fallback from KANBAN: it conforms to
-/// `MediaPlayer` itself and forwards the whole surface 1:1 to the wrapped
+/// `SomePlayer` itself and forwards the whole surface 1:1 to the wrapped
 /// engine, re-emitting `objectWillChange` whenever the engine publishes.
 /// Views observe the box and never see an engine type.
-@MainActor public final class MediaPlayerBox: MediaPlayer {
+@MainActor public final class SomePlayerBox: SomePlayer {
   /// Re-published to observers whenever the wrapped engine publishes a
   /// change. Explicit (not synthesized) because the box stores no
   /// @Published properties of its own. `nonisolated(unsafe)`: the
@@ -22,19 +22,19 @@ import Foundation
   public nonisolated(unsafe) let objectWillChange = ObservableObjectPublisher()
 
   /// The engine behind this box. Views conditional-cast it when they need
-  /// the engine's concrete surface (e.g. NativeVideoView -> NativeMediaPlayer
+  /// the engine's concrete surface (e.g. NativeVideoView -> NativeSomePlayer
   /// to register as the frame sink).
-  public let engine: any MediaPlayer
+  public let engine: any SomePlayer
 
   private var cancellables: Set<AnyCancellable> = []
 
-  public init(engine: any MediaPlayer) {
+  public init(engine: any SomePlayer) {
     self.engine = engine
     engine.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(
       in: &cancellables)
   }
 
-  // MARK: - MediaPlayer forwarding
+  // MARK: - SomePlayer forwarding
 
   public var state: PlaybackState { engine.state }
   public var isPlaying: Bool { engine.isPlaying }
@@ -69,6 +69,8 @@ import Foundation
   public func seekRelative(_ seconds: Double) { engine.seekRelative(seconds) }
   public func skipChapter(_ direction: Int) { engine.skipChapter(direction) }
   public func stop() { engine.stop() }
+  public func nextTrack() { engine.nextTrack() }
+  public func previousTrack() { engine.previousTrack() }
   public func selectAudioTrack(_ id: Int) { engine.selectAudioTrack(id) }
   public func selectSubtitleTrack(_ id: Int?) { engine.selectSubtitleTrack(id) }
 }

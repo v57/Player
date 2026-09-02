@@ -3,7 +3,7 @@ import Foundation
 /// A point in media time, in seconds.
 ///
 /// Engines publish positions and durations as plain `Double` seconds on
-/// `MediaPlayer` (that's what the timeline bindings consume); `MediaTime` is
+/// `SomePlayer` (that's what the timeline bindings consume); `MediaTime` is
 /// the shared value type for formatting and arithmetic on those values.
 public struct MediaTime: Equatable, Comparable, Hashable, Sendable {
   public var seconds: Double

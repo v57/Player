@@ -1,10 +1,10 @@
-import MediaPlayer
+import SomePlayer
 import SwiftUI
 
 /// "Audio" and "Subtitles" menus in the app menu bar, listing the current
 /// file's tracks with a checkmark on the active one.
 struct PlayerCommands: Commands {
-  @ObservedObject var player: MediaPlayerBox
+  @ObservedObject var player: SomePlayerBox
   @ObservedObject var uiState: PlayerUIState
 
   var body: some Commands {

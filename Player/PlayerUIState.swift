@@ -1,7 +1,7 @@
 import AppKit
 import Combine
 import Foundation
-import MediaPlayer
+import SomePlayer
 
 /// Pure UI state that doesn't belong on the playback protocol. Owned by the
 /// App and injected alongside the player box, so both ContentView and the
@@ -38,9 +38,9 @@ import MediaPlayer
   /// The player box to ask about the playing state (weak — the box owns
   /// the engine; the UI state is a UI-layer observer only). Injected by
   /// the App before any window exists.
-  private weak var player: MediaPlayerBox?
+  private weak var player: SomePlayerBox?
 
-  init(player: MediaPlayerBox? = nil) { self.player = player }
+  init(player: SomePlayerBox? = nil) { self.player = player }
 
   private var idleTimer: Timer?
   /// Local event monitor: sees every event routed to this window (mouse,

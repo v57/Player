@@ -10,8 +10,8 @@
 //      frames in decode order (B-frames -> client must reorder).
 //
 // Build (against the app's shipped minimal FFmpeg dylibs):
-//   clang -c ../../../Sources/MediaPlayerCDemux/MediaDemuxer.c -I ../../../Sources/FFmpeg/include -o MediaDemuxer.o
-//   cp ../../../Sources/MediaPlayerCDemux/MediaDemuxer.h .
+//   clang -c ../../../Sources/SomePlayerCDemux/MediaDemuxer.c -I ../../../Sources/FFmpeg/include -o MediaDemuxer.o
+//   cp ../../../Sources/SomePlayerCDemux/MediaDemuxer.h .
 //   xcrun swiftc vt-decode-hevc.swift MediaDemuxer.o -I ../../../Sources/FFmpeg/include \
 //       -L ../../../Sources/FFmpeg/lib -lavformat -lavcodec -lavutil \
 //       -import-objc-header MediaDemuxer.h -o vt-decode-hevc
