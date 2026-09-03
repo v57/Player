@@ -1154,6 +1154,16 @@ public final class PlaybackController {
     audioClockOffset = 0
     pausedClock = 0
     discardAudioBefore = nil
+    // Per-file counters that must NOT survive a teardown. `audioFramesScheduled`
+    // counts samples scheduled ahead on the (now-stopped) engine; a left-over
+    // value makes the next file's audioSecondsAhead compute as `stale/sr - 0`
+    // on a freshly-started node, tripping the audio-ahead backpressure gate on
+    // every tick so video is never demuxed/presented — the "frozen last frame
+    // until pause and unpause" bug (pause resets this to 0). `lastPresentedPTS`
+    // would otherwise drop every frame of the new file (pts << stale value).
+    // Mirrors the resets in pause()/performSeek()/performAudioSwitch().
+    audioFramesScheduled = 0
+    lastPresentedPTS = nil
     videoQueueLock.lock()
     videoQueue.removeAll()
     videoQueueLock.unlock()
