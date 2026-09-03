@@ -436,22 +436,9 @@ public final class PlaybackController {
       // collect VPS (32), SPS (33) and PPS (34) and feed them to
       // CMVideoFormatDescriptionCreateFromHEVCParameterSets, which requires at
       // least one of each (VPS+SPS+PPS).
-      guard let hvcc = parseHVCC(bytes) else { throw NativePlayerError.videoDecoderFailed }
-      var vps: [[UInt8]] = []
-      var sps: [[UInt8]] = []
-      var pps: [[UInt8]] = []
-      for (type, nal) in hvcc.nals {
-        switch type {
-        case 32: vps.append(nal)
-        case 33: sps.append(nal)
-        case 34: pps.append(nal)
-        default: break
-        }
-      }
-      guard !vps.isEmpty, !sps.isEmpty, !pps.isEmpty else {
-        throw NativePlayerError.videoDecoderFailed
-      }
-      let ordered = vps + sps + pps
+      guard let par = hevcParameterSets(demuxer: demuxer, streamIndex: video.id, extradata: bytes)
+      else { throw NativePlayerError.videoDecoderFailed }
+      let ordered = par.vps + par.sps + par.pps
       var ptrs: [UnsafePointer<UInt8>] = []
       var sizes: [Int] = []
       for n in ordered {
@@ -464,7 +451,7 @@ public final class PlaybackController {
       let status = CMVideoFormatDescriptionCreateFromHEVCParameterSets(
         allocator: kCFAllocatorDefault, parameterSetCount: ptrs.count,
         parameterSetPointers: &ptrs, parameterSetSizes: &sizes,
-        nalUnitHeaderLength: Int32(hvcc.lengthSize), extensions: nil,
+        nalUnitHeaderLength: Int32(par.lengthSize), extensions: nil,
         formatDescriptionOut: &fd)
       guard status == noErr, let fd else { throw NativePlayerError.videoDecoderFailed }
       vtFormatDesc = fd
@@ -575,6 +562,87 @@ public final class PlaybackController {
       }
     }
     return HVCCParameters(nals: nals, lengthSize: lengthSize)
+  }
+
+  /// VPS/SPS/PPS collected for the VideoToolbox HEVC format description.
+  /// `isComplete` means at least one of each is present, which is what
+  /// CMVideoFormatDescriptionCreateFromHEVCParameterSets requires.
+  private struct HVCCParSets {
+    var vps: [[UInt8]] = []
+    var sps: [[UInt8]] = []
+    var pps: [[UInt8]] = []
+    var lengthSize: Int
+    var isComplete: Bool { !vps.isEmpty && !sps.isEmpty && !pps.isEmpty }
+  }
+
+  /// Collects HEVC VPS/SPS/PPS for the format description.
+  ///
+  /// Most MKVs carry the parameter sets in CodecPrivate (hvcC). Some muxers
+  /// (and some downloaders' remuxes) ship a bare 23-byte hvcC header with
+  /// `numOfArrays == 0` and carry the sets IN-BAND — the first video packet is
+  /// an IRAP keyframe whose leading NALs (types 32/33/34) hold VPS/SPS/PPS.
+  /// VideoToolbox requires at least one of each, so when CodecPrivate is empty
+  /// or incomplete we recover the sets from the first video packet(s), then
+  /// rewind the demuxer to the start so the playback loop re-reads the
+  /// SPS/PPS keyframe from the beginning.
+  private func hevcParameterSets(
+    demuxer: FFmpegDemuxer, streamIndex: Int, extradata: [UInt8]
+  ) -> HVCCParSets? {
+    var par = HVCCParSets(lengthSize: extradata.count > 21 ? Int(extradata[21] & 0x03) + 1 : 4)
+    if let hvcc = parseHVCC(extradata) {
+      par.lengthSize = hvcc.lengthSize
+      for (type, nal) in hvcc.nals {
+        switch type {
+        case 32: par.vps.append(nal)
+        case 33: par.sps.append(nal)
+        case 34: par.pps.append(nal)
+        default: break
+        }
+      }
+    }
+    if !par.isComplete {
+      // CodecPrivate gave us nothing (or a partial set) — recover in-band.
+      if let inband = inBandHVCC(
+        demuxer: demuxer, streamIndex: streamIndex, lengthSize: par.lengthSize)
+      {
+        par = inband
+      }
+    }
+    return par.isComplete ? par : nil
+  }
+
+  /// Reads the first video packet(s) and pulls VPS/SPS/PPS out of the
+  /// length-prefixed NAL stream (MKV HEVC is AVCC-style — a 4-byte length per
+  /// NAL). Rewinds the demuxer to the start both before and after so the
+  /// playback loop sees the SPS/PPS keyframe at its natural position.
+  private func inBandHVCC(
+    demuxer: FFmpegDemuxer, streamIndex: Int, lengthSize: Int
+  ) -> HVCCParSets? {
+    let len = max(1, lengthSize)
+    _ = try? demuxer.seek(to: 0)
+    var par = HVCCParSets(lengthSize: lengthSize)
+    for _ in 0..<64 {
+      guard let pkt = try? demuxer.readPacket() else { break }
+      guard pkt.streamID == streamIndex else { continue }
+      let b = [UInt8](pkt.data)
+      var off = 0
+      while off + len <= b.count {
+        var nlen = 0
+        for i in 0..<len { nlen = (nlen << 8) | Int(b[off + i]) }
+        off += len
+        guard nlen > 0, off + nlen <= b.count else { break }
+        let nalType = (b[off] >> 1) & 0x3F
+        let nal = Array(b[off..<(off + nlen)])
+        if nalType == 32 { par.vps.append(nal) }
+        else if nalType == 33 { par.sps.append(nal) }
+        else if nalType == 34 { par.pps.append(nal) }
+        off += nlen
+        if par.isComplete { break }
+      }
+      if par.isComplete { break }
+    }
+    _ = try? demuxer.seek(to: 0)
+    return par
   }
 
   /// Session creation shared by H.264 and HEVC: collector box, output callback,
