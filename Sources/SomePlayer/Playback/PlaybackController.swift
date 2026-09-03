@@ -406,7 +406,13 @@ public final class PlaybackController {
 
     self.videoStreamIndex = video.id
     self.audioStreamIndex = audio?.id
-    self.subtitleStreamIndex = subtitle?.id
+    // Subtitles default OFF. Auto-assigning the first subtitle stream here
+    // made the engine render subtitles even when the app's stored pick (or the
+    // UI) said off, and re-enabled the container default on every open / the
+    // partial-download retry. An explicit selection (applyPendingTrackPicks /
+    // the menu) sets subtitleStreamIndex; probe only records that the stream
+    // exists for the track list.
+    self.subtitleStreamIndex = nil
     self.videoTB = (Int64(video.timeBase.num), video.timeBase.den)
 
     try setupVideoToolbox(demuxer: demuxer, video: video)
@@ -1254,6 +1260,7 @@ public final class PlaybackController {
     demuxer = nil
     videoStreamIndex = nil
     audioStreamIndex = nil
+    subtitleStreamIndex = nil
     clearAllSinks()
   }
 
@@ -1569,7 +1576,12 @@ public final class PlaybackController {
     guard streamIndex != audioStreamIndex else { return }
 
     generation &+= 1
-    videoQueueGeneration = generation  // in-flight frames from the old stream are stale
+    let gen = generation
+    videoQueueLock.lock()
+    videoQueue.removeAll()
+    videoQueueGeneration = gen  // in-flight frames from the old stream are stale
+    videoQueueLock.unlock()
+    pendingVideoPackets.removeAll()
     // Flush the old audio decoder + scheduled buffers.
     if let audioDecoder {
       media_audio_decoder_free(audioDecoder)
@@ -1594,6 +1606,7 @@ public final class PlaybackController {
       audioStreamIndex = streamIndex
       // Re-seek so both pipelines restart at the current position.
       let current = currentClock()
+      lastPresentedPTS = current
       try demuxer.seek(to: current)
       discardAudioBefore = current
       restartAudioPlayer()
@@ -1608,10 +1621,29 @@ public final class PlaybackController {
   func selectSubtitleTrack(streamIndex: Int?) { submit(.switchSubtitle(streamIndex)) }
 
   private func performSubtitleSwitch(streamIndex: Int?, demuxer: FFmpegDemuxer) {
+    // No-op when the subtitle state isn't actually changing (e.g. the
+    // partial-download retry re-applies an already-off preference). Without
+    // this the re-seek below runs once per open for a permanently-off subtitle.
+    guard streamIndex != subtitleStreamIndex else { return }
     clearSubtitleCues()
     subtitleStreamIndex = streamIndex
+    // The seek below re-positions the demuxer BACKWARD to a keyframe, so the
+    // loop re-reads VIDEO from the keyframe before the target. Reset video
+    // presentation state (mirror of performSeek) so that window is dropped
+    // instead of re-plays or stalling: a stale lastPresentedPTS would drop
+    // every re-decoded frame in the keyframe..target window (pts < last), and
+    // the still-queued pre-switch frames would replay. discardAudioBefore
+    // (below) keeps the audio side from backlogging.
+    generation &+= 1
+    let gen = generation
+    videoQueueLock.lock()
+    videoQueue.removeAll()
+    videoQueueGeneration = gen
+    videoQueueLock.unlock()
+    pendingVideoPackets.removeAll()
     do {
       let current = currentClock()
+      lastPresentedPTS = current
       try demuxer.seek(to: current)
       // The demuxer re-seeks BACKWARD to a keyframe (GOP-granular, ~10 s on
       // this corpus), so the loop re-reads VIDEO and AUDIO from that

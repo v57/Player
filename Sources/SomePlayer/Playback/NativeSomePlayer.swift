@@ -133,11 +133,17 @@ import SomePlayerCDemux
       currentFilePath = url.standardizedFileURL.path
       fileName = url.lastPathComponent
       duration = info.duration ?? 0
-      mapTracks(info.allTracks)
-      chapters = info.chapters.map { PlayerChapter(title: $0.title, startTime: $0.startTime) }
+      // Load remembered selections BEFORE mapping tracks: applyPendingTrackPicks
+      // runs at the end of mapTracks, so the picks must be set by then. They
+      // were previously loaded after mapTracks, so a stored audio pick and the
+      // subtitles-off preference were silently discarded — every open (and most
+      // visibly the partial-download retry) fell back to the container's default
+      // audio and the first subtitle track.
       pendingResumePosition = resumeOverride ?? store?.resumePosition(for: currentFilePath ?? "")
       pendingAudioPick = store?.latestTrackPick(kind: "audio")
       pendingSubPick = store?.latestTrackPick(kind: "sub")
+      mapTracks(info.allTracks)
+      chapters = info.chapters.map { PlayerChapter(title: $0.title, startTime: $0.startTime) }
       state = .ready
       // Persist a security-scoped bookmark so the file can be reopened
       // from the Recent list (a bare path outside the container is
