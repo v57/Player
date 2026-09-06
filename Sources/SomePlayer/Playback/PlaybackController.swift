@@ -444,22 +444,9 @@ public final class PlaybackController {
       // least one of each (VPS+SPS+PPS).
       guard let par = hevcParameterSets(demuxer: demuxer, streamIndex: video.id, extradata: bytes)
       else { throw NativePlayerError.videoDecoderFailed }
-      let ordered = par.vps + par.sps + par.pps
-      var ptrs: [UnsafePointer<UInt8>] = []
-      var sizes: [Int] = []
-      for n in ordered {
-        n.withUnsafeBufferPointer {
-          ptrs.append($0.baseAddress!)
-          sizes.append(n.count)
-        }
-      }
-      var fd: CMVideoFormatDescription?
-      let status = CMVideoFormatDescriptionCreateFromHEVCParameterSets(
-        allocator: kCFAllocatorDefault, parameterSetCount: ptrs.count,
-        parameterSetPointers: &ptrs, parameterSetSizes: &sizes,
-        nalUnitHeaderLength: Int32(par.lengthSize), extensions: nil,
-        formatDescriptionOut: &fd)
-      guard status == noErr, let fd else { throw NativePlayerError.videoDecoderFailed }
+      guard let fd = makeFormatDescription(
+        params: par.vps + par.sps + par.pps, lengthSize: par.lengthSize, hevc: true)
+      else { throw NativePlayerError.videoDecoderFailed }
       vtFormatDesc = fd
       try setupVTCommon(formatDesc: fd)
     } else {
@@ -468,20 +455,9 @@ public final class PlaybackController {
       guard !avcc.sps.isEmpty, !avcc.pps.isEmpty else {
         throw NativePlayerError.videoDecoderFailed
       }
-      var ptrs: [UnsafePointer<UInt8>] = []
-      var sizes: [Int] = []
-      for n in avcc.sps + avcc.pps {
-        n.withUnsafeBufferPointer {
-          ptrs.append($0.baseAddress!)
-          sizes.append(n.count)
-        }
-      }
-      var fd: CMVideoFormatDescription?
-      let status = CMVideoFormatDescriptionCreateFromH264ParameterSets(
-        allocator: kCFAllocatorDefault, parameterSetCount: ptrs.count,
-        parameterSetPointers: &ptrs, parameterSetSizes: &sizes,
-        nalUnitHeaderLength: Int32(avcc.lengthSize), formatDescriptionOut: &fd)
-      guard status == noErr, let fd else { throw NativePlayerError.videoDecoderFailed }
+      guard let fd = makeFormatDescription(
+        params: avcc.sps + avcc.pps, lengthSize: avcc.lengthSize, hevc: false)
+      else { throw NativePlayerError.videoDecoderFailed }
       vtFormatDesc = fd
       try setupVTCommon(formatDesc: fd)
     }
@@ -568,6 +544,57 @@ public final class PlaybackController {
       }
     }
     return HVCCParameters(nals: nals, lengthSize: lengthSize)
+  }
+
+  /// Builds a CMVideoFormatDescription from parameter-set NALs, holding the
+  /// byte storage alive for the whole CoreMedia call.
+  ///
+  /// The previous code captured `baseAddress` from `withUnsafeBufferPointer`
+  /// into a `[UnsafePointer<UInt8>]` and passed it to
+  /// `CMVideoFormatDescriptionCreateFrom*ParameterSets` AFTER the loop and the
+  /// temporaries (e.g. `par.vps + par.sps + par.pps`) went out of scope. That
+  /// is undefined behavior: under whole-module optimization (`-O`) the
+  /// optimizer proves those arrays have no later *direct* use and ends their
+  /// lifetime before the C call, so the escaped pointers dangle and CoreMedia
+  /// returns `-12712` (`kCMFormatDescriptionBridgeError_InvalidParameter`).
+  /// `-Onone` (Debug) keeps the arrays heap-resident for the whole function
+  /// scope, masking the bug — the classic "works in Debug, fails in Release".
+  ///
+  /// Fix: pack all NALs into ONE contiguous `[UInt8]`, then build the pointer
+  /// array and make the CoreMedia call INSIDE the same `withUnsafeBufferPointer`
+  /// closure that wraps it. The `withUnsafeBufferPointer` contract guarantees
+  /// `packed`'s storage is valid for the whole closure body, so the pointers
+  /// cannot dangle — at any optimization level. CoreMedia copies the bytes at
+  /// creation, so the pointers only need to live for the call.
+  private func makeFormatDescription(
+    params: [[UInt8]], lengthSize: Int, hevc: Bool
+  ) -> CMVideoFormatDescription? {
+    var packed = [UInt8]()
+    var offsets = [Int](repeating: 0, count: params.count)
+    var sizes = [Int](repeating: 0, count: params.count)
+    for (i, n) in params.enumerated() {
+      offsets[i] = packed.count
+      sizes[i] = n.count
+      packed.append(contentsOf: n)
+    }
+    var fd: CMVideoFormatDescription?
+    let status = packed.withUnsafeBufferPointer { pk in
+      let base = pk.baseAddress!
+      let pts: [UnsafePointer<UInt8>] = offsets.map { base + $0 }
+      if hevc {
+        return CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+          allocator: kCFAllocatorDefault, parameterSetCount: pts.count,
+          parameterSetPointers: pts, parameterSetSizes: sizes,
+          nalUnitHeaderLength: Int32(lengthSize), extensions: nil,
+          formatDescriptionOut: &fd)
+      } else {
+        return CMVideoFormatDescriptionCreateFromH264ParameterSets(
+          allocator: kCFAllocatorDefault, parameterSetCount: pts.count,
+          parameterSetPointers: pts, parameterSetSizes: sizes,
+          nalUnitHeaderLength: Int32(lengthSize), formatDescriptionOut: &fd)
+      }
+    }
+    return status == noErr ? fd : nil
   }
 
   /// VPS/SPS/PPS collected for the VideoToolbox HEVC format description.
