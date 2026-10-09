@@ -81,6 +81,13 @@ import SomePlayerCDemux
   /// security-scoped file without losing the grant.
   private var currentFileURL: URL?
 
+  /// Identifies the newest open request. Opens are async and several can be
+  /// in flight (Next pressed twice, a file-update retry racing a user open);
+  /// a request that is no longer the newest when its probe returns is
+  /// discarded instead of applying its file name, tracks and resume seek on
+  /// top of the newer file.
+  private var openToken: UInt64 = 0
+
   /// Reported state machine. The controller drives the coarse states; the
   /// finer ones (buffering/seeking/ended) are derived here until the
   /// controller exposes its own transitions.
@@ -91,7 +98,6 @@ import SomePlayerCDemux
 
   public init() {
     controller.configure(
-      sink: nil,
       onStateChange: { [weak self] in self?.refreshFromController() },
       onPartialEnd: { [weak self] position, wasError in
         self?.handlePartialEnd(position: position, wasError: wasError)
@@ -111,6 +117,8 @@ import SomePlayerCDemux
   /// that position instead of consulting the store (used by the file-update
   /// wait retry). Opening a new (different) file cancels any in-flight wait.
   private func openInternal(_ url: URL, resumeOverride: Double?) async throws {
+    openToken &+= 1
+    let token = openToken
     stopWaitingForFileUpdate()
     if resumeOverride == nil { saveCurrentPosition() }
     // Hold/replace the sandbox grant (security-scoped URL) for the file's
@@ -130,6 +138,9 @@ import SomePlayerCDemux
     isWaitingForFileUpdate = false
     do {
       let info = try await controller.open(url)
+      // A newer open (or a stop) superseded this one while it was probing;
+      // the controller already belongs to it.
+      guard token == openToken else { return }
       currentFilePath = url.standardizedFileURL.path
       fileName = url.lastPathComponent
       duration = info.duration ?? 0
@@ -142,7 +153,7 @@ import SomePlayerCDemux
       pendingResumePosition = resumeOverride ?? store?.resumePosition(for: currentFilePath ?? "")
       pendingAudioPick = store?.latestTrackPick(kind: "audio")
       pendingSubPick = store?.latestTrackPick(kind: "sub")
-      mapTracks(info.allTracks)
+      mapTracks(info.allTracks, activeAudioID: info.audio?.id)
       chapters = info.chapters.map { PlayerChapter(title: $0.title, startTime: $0.startTime) }
       state = .ready
       // Persist a security-scoped bookmark so the file can be reopened
@@ -158,11 +169,17 @@ import SomePlayerCDemux
       controller.play()
       applyPendingResume()
     } catch {
+      guard token == openToken else { return }
       // A file being downloaded may not be probe-able yet (the container
       // header is not fully written). If the file is still an active file on
       // disk, wait for it to grow rather than surfacing a hard error;
-      // otherwise (a genuinely unplayable/static file) fail as usual.
-      if fileIsRecentlyActive(currentFileURL?.path ?? url.path) {
+      // otherwise (a genuinely unplayable/static file) fail as usual. An
+      // unsupported codec is definitive — the header that names it is already
+      // on disk — so it always fails (a freshly downloaded AAC file used to
+      // sit on "Waiting" forever).
+      if !Self.isDefinitiveOpenFailure(error),
+        fileIsRecentlyActive(currentFileURL?.path ?? url.path)
+      {
         beginWaitingForFileUpdate(at: resumeOverride ?? 0)
       } else {
         releaseScopedAccess()
@@ -179,7 +196,7 @@ import SomePlayerCDemux
     saveCurrentPosition()
   }
 
-  public func seek(to seconds: Double, exact: Bool) { issueSeek(to: seconds) }
+  public func seek(to seconds: Double, exact: Bool) { issueSeek(to: seconds, exact: exact) }
 
   public func seekRelative(_ seconds: Double) { issueSeek(to: max(0, position + seconds)) }
 
@@ -210,13 +227,13 @@ import SomePlayerCDemux
   /// current file's directory. `advanceTrack(direction: -1)`.
   public func previousTrack() { advanceTrack(direction: -1) }
 
-  /// The media extensions the player accepts, used to pick siblings for the
-  /// Next/Previous media keys. Matches the app's registered document types
-  /// (mov/mp4/m4v/mkv/webm).
-  private static let videoExtensions: Set<String> = ["mov", "mp4", "m4v", "mkv", "webm"]
+  /// File extensions the engine can open: the vendored FFmpeg build has only
+  /// the Matroska demuxer. Shared with the app (document types, file importer,
+  /// drag & drop) and used to pick siblings for the Next/Previous media keys.
+  public static let supportedFileExtensions: Set<String> = ["mkv"]
 
-  private static func isSupportedVideo(_ url: URL) -> Bool {
-    videoExtensions.contains(url.pathExtension.lowercased())
+  public static func isSupportedFile(_ url: URL) -> Bool {
+    supportedFileExtensions.contains(url.pathExtension.lowercased())
   }
 
   /// Moves to the next/previous sibling of the current file (sorted by
@@ -235,7 +252,7 @@ import SomePlayerCDemux
       files =
         try FileManager.default.contentsOfDirectory(
           at: dir, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]
-        ).filter { Self.isSupportedVideo($0) }
+        ).filter { Self.isSupportedFile($0) }
         .sorted {
           $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
         }
@@ -266,13 +283,14 @@ import SomePlayerCDemux
   /// this the UI timeline would freeze at the pre-seek value even though the
   /// engine seeked — a pause-time seek would appear to "not change the
   /// timeline." While playing the 5 Hz poll corrects `position` next tick.
-  private func issueSeek(to seconds: Double) {
+  private func issueSeek(to seconds: Double, exact: Bool = true) {
     let clamped = duration > 0 ? min(max(seconds, 0), duration) : max(seconds, 0)
-    controller.seek(to: clamped)
+    controller.seek(to: clamped, exact: exact)
     if !isPlaying, duration > 0, clamped != position { position = clamped }
   }
 
   public func stop() {
+    openToken &+= 1  // an open still probing must not resurrect the file
     saveCurrentPosition()
     stopWaitingForFileUpdate()
     controller.stop()
@@ -285,6 +303,12 @@ import SomePlayerCDemux
     position = 0
     duration = 0
     isPlaying = false
+    videoTracks = []
+    audioTracks = []
+    subtitleTracks = []
+    audioTrackID = nil
+    subtitleTrackID = nil
+    chapters = []
     updateDisplaySleepPrevention()
     state = .idle
   }
@@ -297,23 +321,27 @@ import SomePlayerCDemux
 
   /// Registers the Metal view as the frame sink (called by NativeVideoView
   /// on make/update). The controller pushes decoded frames here on MainActor.
-  public func registerSink(_ sink: any VideoFrameSink) {
-    controller.configure(
-      sink: sink, onStateChange: { [weak self] in self?.refreshFromController() })
-  }
+  public func registerSink(_ sink: any VideoFrameSink) { controller.addSink(sink) }
 
   public func selectAudioTrack(_ id: Int) {
+    guard let track = audioTracks.first(where: { $0.id == id }) else { return }
+    guard track.isPlayable else {
+      errorMessage = "Unsupported audio codec: \(track.codec ?? "unknown")"
+      return
+    }
     audioTrackID = id
     pendingAudioPick = nil
-    if let track = audioTracks.first(where: { $0.id == id }) {
-      store?.storeTrackPick(
-        kind: "audio", lang: track.language, title: track.title, trackID: id, isOff: false)
-    }
+    store?.storeTrackPick(
+      kind: "audio", lang: track.language, title: track.title, trackID: id, isOff: false)
     // Native: the id IS the stream index — switch the pipeline.
     controller.selectAudioTrack(streamIndex: id)
   }
 
   public func selectSubtitleTrack(_ id: Int?) {
+    if let id, let track = subtitleTracks.first(where: { $0.id == id }), !track.isPlayable {
+      errorMessage = "Unsupported subtitle format: \(track.codec ?? "unknown")"
+      return
+    }
     subtitleTrackID = id
     pendingSubPick = nil
     if let id, let track = subtitleTracks.first(where: { $0.id == id }) {
@@ -328,36 +356,42 @@ import SomePlayerCDemux
 
   // MARK: - Track mapping (NativeTrackInfo -> MediaTrack)
 
-  private func mapTracks(_ tracks: [NativeTrackInfo]) {
+  /// `activeAudioID` is the stream the engine actually opened; the published
+  /// selection starts from it (the selection used to carry over from the
+  /// previous file and to name the default-flagged track even when the engine
+  /// was playing a different one). Subtitles always start off.
+  private func mapTracks(_ tracks: [NativeTrackInfo], activeAudioID: Int?) {
     videoTracks = []
     audioTracks = []
     subtitleTracks = []
     for t in tracks {
       let kind: MediaTrack.Kind
+      let playable: Bool
       switch t.type {
-      case MEDIA_TRACK_TYPE_VIDEO.rawValue: kind = .video
-      case MEDIA_TRACK_TYPE_AUDIO.rawValue: kind = .audio
-      case MEDIA_TRACK_TYPE_SUBTITLE.rawValue: kind = .subtitle
+      case MEDIA_TRACK_TYPE_VIDEO.rawValue:
+        kind = .video
+        playable = true
+      case MEDIA_TRACK_TYPE_AUDIO.rawValue:
+        kind = .audio
+        playable = PlaybackController.isSupportedAudioCodec(t.codecName)
+      case MEDIA_TRACK_TYPE_SUBTITLE.rawValue:
+        kind = .subtitle
+        playable = PlaybackController.isSupportedSubtitleCodec(t.codecName)
       default: continue
       }
       let mt = MediaTrack(
         id: t.id, kind: kind, codec: t.codecName, language: t.language, title: t.title,
         channelCount: t.channelCount > 0 ? t.channelCount : nil,
         sampleRate: t.sampleRate > 0 ? t.sampleRate : nil, isDefault: t.isDefault,
-        isForced: t.isForced)
+        isForced: t.isForced, isPlayable: playable)
       switch kind {
       case .video: videoTracks.append(mt)
       case .audio: audioTracks.append(mt)
       case .subtitle: subtitleTracks.append(mt)
       }
     }
-    // Default track selection: the container's default-flagged track
-    // first, then the first audio track.
-    if audioTrackID == nil, let d = audioTracks.first(where: { $0.isDefault }) {
-      audioTrackID = d.id
-    } else if audioTrackID == nil, let f = audioTracks.first {
-      audioTrackID = f.id
-    }
+    audioTrackID = activeAudioID
+    subtitleTrackID = nil
     applyPendingTrackPicks()
   }
 
@@ -378,7 +412,7 @@ import SomePlayerCDemux
     // Audio: the controller already plays the default stream on open; a
     // stored pick switches to the matched stream.
     if let pick = pendingAudioPick {
-      if let id = matchTrack(pick, in: audioTracks) {
+      if let id = matchTrack(pick, in: audioTracks.filter(\.isPlayable)), id != audioTrackID {
         audioTrackID = id
         controller.selectAudioTrack(streamIndex: id)
       }
@@ -388,7 +422,7 @@ import SomePlayerCDemux
       if pick.isOff {
         subtitleTrackID = nil
         controller.selectSubtitleTrack(streamIndex: nil)
-      } else if let id = matchTrack(pick, in: subtitleTracks) {
+      } else if let id = matchTrack(pick, in: subtitleTracks.filter(\.isPlayable)) {
         subtitleTrackID = id
         controller.selectSubtitleTrack(streamIndex: id)
       }
@@ -444,6 +478,13 @@ import SomePlayerCDemux
       updateDisplaySleepPrevention()
       if nowPlaying { startPositionTimer() } else { stopPositionTimer() }
     }
+    updateState()
+    // A refused/failed switch leaves the engine on another stream; show that.
+    if currentFilePath != nil, let active = controller.activeAudioStreamIndex,
+      active != audioTrackID
+    {
+      audioTrackID = active
+    }
     guard nowPlaying else { return }
     let clock = controller.currentClockSafe()
     if clock >= 0 {
@@ -451,6 +492,27 @@ import SomePlayerCDemux
       if newPosition != position { position = newPosition }
     }
     autosavePosition()
+  }
+
+  /// Derives the fine-grained states from the controller once a file is
+  /// loaded. opening/failed/idle are owned by the open/stop paths.
+  private func updateState() {
+    guard currentFilePath != nil, state != .opening, state != .failed, !isWaitingForFileUpdate
+    else { return }
+    let next: PlaybackState
+    if controller.isEnded {
+      next = .ended
+    } else if controller.isPlaying {
+      next = .playing
+    } else if controller.isPaused {
+      next = .paused
+    } else {
+      next = .ready
+    }
+    if next != state {
+      objectWillChange.send()
+      state = next
+    }
   }
 
   /// Keeps the display awake (and the system from sleeping) while media is
@@ -510,6 +572,7 @@ import SomePlayerCDemux
   private func beginWaitingForFileUpdate(at position: Double) {
     guard let url = currentFileURL else { return }
     isWaitingForFileUpdate = true
+    state = .buffering
     waitingResumePosition = max(0, position)
     lastFileSignature = fileSignature(of: url)
     startFileUpdateTimer()
@@ -577,6 +640,15 @@ import SomePlayerCDemux
       let mtime = attrs[.modificationDate] as? Date
     else { return false }
     return Date.now.timeIntervalSince(mtime) < 30
+  }
+
+  /// Open failures that cannot be cured by the file growing.
+  private static func isDefinitiveOpenFailure(_ error: Error) -> Bool {
+    switch error {
+    case NativePlayerError.unsupportedVideoCodec, NativePlayerError.unsupportedAudioCodec:
+      return true
+    default: return false
+    }
   }
 
   private func nativeErrorString(_ error: Error) -> String {

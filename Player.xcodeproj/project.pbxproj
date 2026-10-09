@@ -155,10 +155,14 @@
 				"# The dylibs already carry @rpath/ install names (set by",
 				"# build-ffmpeg-macos.sh); LD_RUNPATH_SEARCH_PATHS resolves them.",
 				"",
-				"# install_name_tool invalidated nothing here (names pre-set), but",
-				"# re-sign ad-hoc so macOS accepts them at runtime.",
+				"# Sign with the app's own identity: under the hardened runtime, library",
+				"# validation only loads dylibs signed by the same team. Falls back to",
+				"# ad-hoc for unsigned local builds. A signing failure fails the build",
+				"# instead of shipping an app that cannot load FFmpeg.",
+				"IDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY:--}\"",
 				"for f in \"$FRAMEWORKS\"/libav*.dylib; do",
-				"  codesign --force --sign - \"$f\" >/dev/null 2>&1 || true",
+				"  [ -L \"$f\" ] && continue",
+				"  codesign --force --timestamp=none --options runtime --sign \"$IDENTITY\" \"$f\"",
 				"done",
 				"",
 				"# LGPL distribution obligation: ship the license texts + source pin",
@@ -324,6 +328,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = AUCR797TMH;
 				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -365,6 +370,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = AUCR797TMH;
 				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;

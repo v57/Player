@@ -11,9 +11,8 @@ enum DemuxError: Error {
   case unsupported
 }
 
-/// One decoded-frame-agnostic packet from the container. `data` is a copy
-/// owned by Swift (the C bridge hands out malloc'd buffers; we copy into Data
-/// and let the bridge free its own).
+/// One decoded-frame-agnostic packet from the container. `data` owns the
+/// bridge's malloc'd buffer (adopted without a copy, freed with `free`).
 struct DemuxPacket {
   let streamID: Int
   let pts: Int64  // stream timebase units; Int64.min = unknown
@@ -21,15 +20,27 @@ struct DemuxPacket {
   let duration: Int64
   let keyframe: Bool
   let data: Data
+  /// The packet's stream time base (pts/dts/duration are in these units).
+  /// Matroska defaults to 1/1000, but a non-default TimestampScale changes it,
+  /// so it is carried per packet instead of assumed.
+  let timeBase: Rational
 
   /// Seconds, converted only at the boundary (plan section 7/25).
-  var ptsSeconds: Double? { pts == Int64.min ? nil : Double(pts) / 1000.0 }
+  var ptsSeconds: Double? { pts == Int64.min ? nil : timeBase.seconds(pts) }
+  /// Packet duration in seconds, nil when the container did not set one.
+  var durationSeconds: Double? { duration > 0 ? timeBase.seconds(duration) : nil }
 }
 
 /// Rational time base, as carried by the container.
 struct Rational: Equatable, Sendable {
   let num: Int32
   let den: Int32
+
+  /// `value` time-base units in seconds (1/1000 when the base is degenerate).
+  func seconds(_ value: Int64) -> Double {
+    guard num > 0, den > 0 else { return Double(value) / 1000.0 }
+    return Double(value) * Double(num) / Double(den)
+  }
 }
 
 /// App-owned track metadata mirror of the C MediaTrack (no AV* types).
@@ -78,6 +89,8 @@ final class FFmpegDemuxer {
   /// The raw C handle. Internal so the PlaybackController (same module) can
   /// reach the extradata/decoder bridge calls; no other caller touches it.
   var handle: UnsafeMutablePointer<MediaDemuxer>?
+  /// Per-stream time bases, cached at open so every packet carries its own.
+  private var timeBases: [Int: Rational] = [:]
 
   init() {}
 
@@ -88,6 +101,9 @@ final class FFmpegDemuxer {
     close()
     guard let h = url.path.withCString({ media_open($0) }) else { throw DemuxError.cannotOpen }
     handle = h
+    for i in 0..<trackCount {
+      if let t = track(at: i) { timeBases[i] = t.timeBase }
+    }
   }
 
   func close() {
@@ -95,6 +111,7 @@ final class FFmpegDemuxer {
       media_close(h)
       handle = nil
     }
+    timeBases = [:]
   }
 
   var isOpen: Bool { handle != nil }
@@ -146,12 +163,21 @@ final class FFmpegDemuxer {
     let r = media_read_packet(h, &pkt)
     if r == MEDIA_RESULT_EOF { return nil }
     guard r == MEDIA_RESULT_OK else { throw DemuxError.readFailed }
-    defer { media_packet_free(&pkt) }
 
-    let data = Data(bytes: pkt.data, count: Int(pkt.size))
+    // Adopt the bridge's malloc'd buffer instead of copying it (the packet
+    // used to be copied twice on the way in: av_packet -> malloc -> Data).
+    let data: Data
+    if let bytes = pkt.data, pkt.size > 0 {
+      data = Data(bytesNoCopy: bytes, count: Int(pkt.size), deallocator: .free)
+    } else {
+      media_packet_free(&pkt)
+      data = Data()
+    }
+    let streamID = Int(pkt.stream_id)
     return DemuxPacket(
-      streamID: Int(pkt.stream_id), pts: pkt.pts, dts: pkt.dts, duration: pkt.duration,
-      keyframe: pkt.keyframe != 0, data: data)
+      streamID: streamID, pts: pkt.pts, dts: pkt.dts, duration: pkt.duration,
+      keyframe: pkt.keyframe != 0, data: data,
+      timeBase: timeBases[streamID] ?? Rational(num: 1, den: 1000))
   }
 
   /// Keyframe seek to `seconds` (backward). Throws on failure.

@@ -36,7 +36,7 @@ public final class NativeVideoFrame: @unchecked Sendable {
 
 /// One subtitle cue (SRT Phase A). `text` is the plain SRT text; presentation
 /// is the view's job (CoreText/AppKit overlay).
-struct SubtitleCue {
+struct SubtitleCue: Equatable {
   let start: Double  // seconds
   let end: Double
   let text: String
@@ -73,7 +73,12 @@ public enum NativePlayerError: Error {
 /// - The UI sink is MainActor; frames hop via `Task { @MainActor }`.
 /// - The master clock is audio: AVAudioPlayerNode's render time. When a file
 ///   has no audio, a monotonic clock is used instead.
-public final class PlaybackController {
+///
+/// `@unchecked Sendable`: engine state is confined to `pipelineQueue`; the
+/// few values the MainActor reads (play/pause/ended flags, published clock,
+/// active audio stream, mailbox, sinks, cues, enhancement mode) are behind
+/// their own locks.
+public final class PlaybackController: @unchecked Sendable {
   // MARK: - Configuration (plan §16: conservative buffering)
 
   /// Demux stops when this many packets are queued ahead.
@@ -88,22 +93,60 @@ public final class PlaybackController {
 
   // MARK: - State
 
+  /// Serial queue that owns ALL engine state: probe/open, the demux loop and
+  /// teardown. The probe used to run on a separate queue, so a second open's
+  /// stop() could close the demuxer while the first probe was still reading
+  /// it; everything that touches the demuxer, VT session or audio graph now
+  /// runs here.
   private let pipelineQueue = DispatchQueue(label: "Player.native-pipeline", qos: .userInitiated)
-  private let probeQueue = DispatchQueue(label: "Player.native-probe", qos: .userInitiated)
   private var generation: UInt64 = 0
 
   // Command mailbox (transport fix): the demux loop OWNS pipelineQueue
   // while playing, so pause/seek/stop/track-switch must be delivered via a
   // lock-protected FIFO the loop polls every iteration — enqueueing them on
   // pipelineQueue deadlocks behind the spinning loop.
-  private enum PipelineCommand {
+  enum PipelineCommand: Equatable {
     case pause
     case resume
-    case seek(Double)
+    case seek(Double, exact: Bool)
     case switchAudio(Int)
     case switchSubtitle(Int?)
     case stop
+
+    /// Commands that reposition the demuxer (they also cancel an EOF drain).
+    var repositions: Bool {
+      switch self {
+      case .resume, .seek, .switchAudio, .switchSubtitle: return true
+      case .pause, .stop: return false
+      }
+    }
+
+    /// Commands that still mean something when a NEW loop starts: a seek or a
+    /// track switch issued while nothing was running (e.g. arrow keys after
+    /// the end) applies to the next play. Transport commands (pause, resume,
+    /// stop) belong to the loop that is gone and must never leak into the next
+    /// one — a leftover `.stop` used to tear down the next file right after
+    /// it opened.
+    var survivesLoopRestart: Bool {
+      switch self {
+      case .seek, .switchAudio, .switchSubtitle: return true
+      case .pause, .resume, .stop: return false
+      }
+    }
   }
+
+  /// Appends `cmd` to the mailbox. Consecutive seeks are coalesced (the newest
+  /// target replaces a still-pending one): a slider drag submits a seek per
+  /// tick, and executing every one rebuilt the decoder per tick and left the
+  /// engine seconds behind the pointer.
+  static func enqueue(_ cmd: PipelineCommand, into queue: inout [PipelineCommand]) {
+    if case .seek = cmd, let last = queue.last, case .seek = last {
+      queue[queue.count - 1] = cmd
+    } else {
+      queue.append(cmd)
+    }
+  }
+
   private let commandLock = NSLock()
   private var commandQueue: [PipelineCommand] = []
   private let commandSignal = DispatchSemaphore(value: 0)
@@ -111,7 +154,7 @@ public final class PlaybackController {
 
   private func submit(_ cmd: PipelineCommand) {
     commandLock.lock()
-    commandQueue.append(cmd)
+    Self.enqueue(cmd, into: &commandQueue)
     commandLock.unlock()
     commandSignal.signal()
   }
@@ -122,11 +165,76 @@ public final class PlaybackController {
     return commandQueue.isEmpty ? nil : commandQueue.removeFirst()
   }
 
-  private var isLoopRunning: Bool {
+  private var hasPendingCommand: Bool {
     commandLock.lock()
     defer { commandLock.unlock() }
-    return loopRunning
+    return !commandQueue.isEmpty
   }
+
+  /// Marks the loop as exited — but only when the mailbox is empty, atomically
+  /// with that check. A command that arrives while the loop is winding down is
+  /// therefore always handled by this loop (the caller keeps iterating),
+  /// instead of being stranded for the next one.
+  private func tryExitLoop() -> Bool {
+    commandLock.lock()
+    defer { commandLock.unlock() }
+    guard commandQueue.isEmpty else { return false }
+    loopRunning = false
+    return true
+  }
+
+  // MARK: - Shared state (pipeline writes, MainActor reads)
+
+  private let stateLock = NSLock()
+  private var _isPlaying = false
+  private var _isPaused = false
+  private var _isEnded = false
+  private var _publishedClock: Double = 0
+  private var _hasMedia = false
+  private var _activeAudioStream: Int?
+
+  /// The audio stream actually being decoded (MainActor-safe mirror of the
+  /// pipeline-owned `audioStreamIndex`), so the UI can reflect a refused or
+  /// failed switch.
+  var activeAudioStreamIndex: Int? { withState { _activeAudioStream } }
+  private func publishAudioStream() {
+    let index = audioStreamIndex
+    withState { _activeAudioStream = index }
+  }
+
+  /// True while a probed file is loaded (MainActor-safe; `demuxer` itself is
+  /// pipeline-owned).
+  private var hasMedia: Bool {
+    get { withState { _hasMedia } }
+    set { withState { _hasMedia = newValue } }
+  }
+
+  private func withState<T>(_ body: () -> T) -> T {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return body()
+  }
+
+  /// Published state (read from MainActor).
+  private(set) var isPlaying: Bool {
+    get { withState { _isPlaying } }
+    set { withState { _isPlaying = newValue } }
+  }
+  private(set) var isPaused: Bool {
+    get { withState { _isPaused } }
+    set { withState { _isPaused = newValue } }
+  }
+  /// True once playback ran to the end of the file (drain finished). Cleared
+  /// by any reposition, a new play session, or stop.
+  private(set) var isEnded: Bool {
+    get { withState { _isEnded } }
+    set { withState { _isEnded = newValue } }
+  }
+
+  /// Records the media clock for MainActor readers. The clock itself reads the
+  /// audio node and a dozen pipeline-owned fields, so the UI must not compute it
+  /// directly; the pipeline publishes it every tick and at every reposition.
+  private func publishClock(_ value: Double) { withState { _publishedClock = value } }
 
   private var demuxer: FFmpegDemuxer?
   private var videoStreamIndex: Int?
@@ -137,11 +245,24 @@ public final class PlaybackController {
   // Subtitle cues (SRT Phase A): parsed from subtitle-stream packets.
   private var subtitleCues: [SubtitleCue] = []
   private var subtitleCuesLock = NSLock()
+  /// Codec of the active subtitle stream (decides how packet text is parsed).
+  private var subtitleCodec = ""
 
   // Video decode
   private var vtSession: VTDecompressionSession?
   private var vtFormatDesc: CMVideoFormatDescription?
   private var pendingVideoPackets: [DemuxPacket] = []
+  /// Seconds of video currently stashed in `pendingVideoPackets` (bounds it).
+  private var pendingVideoSeconds: Double = 0
+  /// Cap on the stashed video (compressed packets, ~200 KB each at 4K) — see
+  /// the video-queue gate in tick.
+  private let maxStashedVideoSeconds = 3.0
+  /// Seek verification: the target of the most recent seek, logged against the
+  /// FIRST video packet actually read after it. A seek that "succeeds" but
+  /// leaves the demuxer elsewhere (the HEVC in-band rewind bug) shows up here
+  /// as a first-pts far from the target — it is the cheap, direct check for the
+  /// silent-seek-discard class, so keep it.
+  private var verifySeekTarget: Double?
   /// Retains the VT output-callback context (the collector box must live
   /// as long as the session).
   private var videoCollectorBox: VideoCollectorBox?
@@ -151,7 +272,43 @@ public final class PlaybackController {
   private var audioEngine: AVAudioEngine?
   private var audioPlayer: AVAudioPlayerNode?
   private var audioFormat: AVAudioFormat?
-  private var audioFramesScheduled = 0  // samples ahead of clock
+  /// Node-time seconds at which the currently scheduled audio content runs out
+  /// (the player node's OWN timeline). Maintained at SCHEDULE time as
+  /// `max(nodeSeconds, previous end) + frameDuration` for every scheduled PCM
+  /// frame, so it is exact and needs no tap.
+  ///
+  /// Why this exists — the accumulating audio-lag bug: the master clock is the
+  /// player node's render time, and that clock FREE-RUNS. The node's render
+  /// callback keeps producing output (silence) while there is nothing
+  /// scheduled, so its clock advances even when no audio can advance. Every
+  /// starved second therefore adds a permanent second to the audio's distance
+  /// behind the clock — and video follows the clock, so the audio ends up that
+  /// far behind the picture for the rest of the session (nothing re-bases it
+  /// until the next seek). Measured on video.mkv (4K HEVC + 7 audio tracks):
+  /// the open/resume seek walks the keyframe->target window (~2 s of dropped
+  /// 4K decode) with nothing scheduled, and the 1 s summary reported
+  /// `aud=-2.03s` — i.e. the audio landed 2.03 s behind the picture.
+  ///
+  /// The clamp (see currentClock) holds the media clock at this content end
+  /// while the node is dry, and `reanchorAudioClock` shifts the offset when
+  /// feeding resumes so the media timeline continues where it held. The audio
+  /// PCM we schedule is contiguous in media time, so the clock stays equal to
+  /// the media position of the audio actually being rendered: a starvation
+  /// becomes a brief freeze of BOTH streams (video holds its frame) instead of
+  /// a permanent desync.
+  private var audioContentEndNode: Double = 0
+  /// Seconds of audio starvation absorbed by the clamp (diagnostics: this is
+  /// exactly the audio lag that would have accumulated without it).
+  private var audioStarvedSeconds: Double = 0
+  private var audioStarvedWindow: Double = 0
+  /// A starvation longer than this is treated as "the audio pipeline is dead"
+  /// rather than "content not ready yet": the clamp is released so the video
+  /// can still play out (a 10 s hold would freeze a broken stream forever).
+  /// The keyframe->target warm-up it is designed for is a GOP long, ~2 s here.
+  private let audioStarveHoldMaxSeconds = 10.0
+  /// Set once the demuxer has no more packets (EOF / partial end). No audio can
+  /// follow, so the clamp is lifted and the clock may run out the video tail.
+  private var audioSourceExhausted = false
   private var audioBytesPerFrame: Int = 0
   private var audioIsRunning = false
   /// The channel count the audio DECODER emits for the current track (the
@@ -160,14 +317,25 @@ public final class PlaybackController {
   /// decoded frames against THIS, not the player format.
   private var audioSourceChannels = 0
 
-  // Audio enhancement (dialogue modes). The mode and the downmix tables are
-  // read per decoded frame from the pipeline queue and written from the
-  // main thread (menu selection), so they live behind a lock. The chain
-  // pointer itself follows the codebase's existing cross-thread reference
-  // pattern (audioEngine/audioPlayer are read on main the same way).
+  // Audio enhancement (dialogue modes). The mode, the chain reference and
+  // the downmix tables are read per decoded frame from the pipeline queue
+  // and written from the main thread (menu selection), so they all live
+  // behind a lock.
   private let enhancementLock = NSLock()
   private var enhancementMode: AudioEnhancementMode = .original
-  private var enhancementChain: AudioEnhancementChain?
+  private var _enhancementChain: AudioEnhancementChain?
+  private var enhancementChain: AudioEnhancementChain? {
+    get {
+      enhancementLock.lock()
+      defer { enhancementLock.unlock() }
+      return _enhancementChain
+    }
+    set {
+      enhancementLock.lock()
+      _enhancementChain = newValue
+      enhancementLock.unlock()
+    }
+  }
   /// Source roles when the multichannel source is being downmixed app-side
   /// to stereo (stereo output device); nil otherwise.
   private var downmixRoles: [ChannelRole]?
@@ -199,8 +367,9 @@ public final class PlaybackController {
   func setEnhancementMode(_ mode: AudioEnhancementMode) {
     enhancementLock.lock()
     enhancementMode = mode
+    let chain = _enhancementChain
     enhancementLock.unlock()
-    if let chain = enhancementChain {
+    if let chain {
       chain.apply(preset: AudioEnhancementPreset.preset(for: mode))
     }
     NSLog("[Native] enhancement mode: %@", mode.rawValue)
@@ -216,6 +385,88 @@ public final class PlaybackController {
   private var lastPresentedPTS: Double?
   private var droppedFrames = 0
   private var presentedFrames = 0
+  /// VideoToolbox pipeline counters, for the 1 s summary. `vtSubmitted` counts
+  /// frames handed to the decoder, `vtReturned` every output callback (decoded,
+  /// dropped or failed), `vtDropped`/`vtErrors` the bad outcomes, and `vtStale`
+  /// frames discarded by the generation gate (a stale decode after a seek).
+  /// `vtSubmitted - vtReturned` is the DECODER's in-flight depth — the quantity
+  /// that must be bounded. This is a client-side backpressure requirement, not
+  /// an optimisation: VideoToolbox's asynchronous decompression DROPS frames it
+  /// cannot keep up with and reports them only via `kVTDecodeInfo_FrameDropped`
+  /// in the output callback's info flags. Measured on a 4K HEVC file before the
+  /// bound existed: 1977 frames submitted over 79 s against 450 returned — VT
+  /// discarded ~75 % of the video, which surfaced as "video shows ~6 fps while
+  /// the audio plays normally" (and, over a longer run, as growing memory from
+  /// the un-returned sample buffers).
+  private var vtSubmitted = 0
+  private var vtReturned = 0
+  private var vtDropped = 0
+  private var vtErrors = 0
+  private var vtStale = 0
+  /// Distinct non-noErr statuses seen from the decoder (logged once each, so a
+  /// failure mode is identifiable without per-frame log spam).
+  private var loggedStatuses: Set<OSStatus> = []
+  private var summaryVTSubmitted = 0
+  private var summaryVTReturned = 0
+  /// Max frames allowed in flight inside the decoder (see vtSubmitted).
+  private let maxVTInFlight = 6
+  /// Video packets read from the demuxer and frames handed to the decoder, plus
+  /// submissions whose pts did not advance. `vid` vs `sub` detects a packet that
+  /// never reached the decoder (a silently dropped frame breaks HEVC reference
+  /// chains and shows up as kVTVideoDecoderMalfunctionErr); `nonmono` detects the
+  /// SAME frame being submitted repeatedly (duplicate feeds).
+  private var videoPacketsRead = 0
+  private var lastSubmittedPTS: Double?
+  private var vtNonMonotonic = 0
+
+  /// Records one VT output outcome (VT's thread). Counts the slot as finished
+  /// whatever the status — a dropped frame is not "still decoding".
+  private func recordVTOutcome(status: OSStatus, flags: VTDecodeInfoFlags, pts: Double) {
+    var firstSeen: OSStatus?
+    var logThisFrame = false
+    videoQueueLock.lock()
+    vtReturned += 1
+    if status != noErr {
+      vtErrors += 1
+      if loggedStatuses.insert(status).inserted { firstSeen = status }
+      // First few failing frames in full: their pts shows whether the failures
+      // cluster at one place in the stream (a bitstream/reference problem) or
+      // are spread through it (a lifetime/ordering problem).
+      if vtErrors <= 3 { logThisFrame = true }
+    }
+    if flags.contains(.frameDropped) { vtDropped += 1 }
+    videoQueueLock.unlock()
+    if let firstSeen {
+      NSLog("[Native] VT decode returned status %d (first occurrence)", firstSeen)
+    }
+    if logThisFrame {
+      NSLog("[Native] VT decode failed at pts=%.3f status=%d flags=%u", pts, status, flags.rawValue)
+    }
+  }
+
+  /// True when the decoder is at its in-flight limit and must not be fed more.
+  /// Unbounded submission is what makes VT drop frames.
+  private func videoDecoderSaturated() -> Bool {
+    videoQueueLock.lock()
+    defer { videoQueueLock.unlock() }
+    return vtSubmitted - vtReturned >= maxVTInFlight
+  }
+
+  /// Resets the decoder accounting when the session is replaced (seek / track
+  /// switch): outstanding callbacks from the invalidated session never arrive,
+  /// so their slots would otherwise count as in flight forever and the
+  /// backpressure would stall video permanently.
+  private func resetVTCounters() {
+    videoQueueLock.lock()
+    vtSubmitted = 0
+    vtReturned = 0
+    vtDropped = 0
+    vtErrors = 0
+    vtStale = 0
+    videoQueueLock.unlock()
+    summaryVTSubmitted = 0
+    summaryVTReturned = 0
+  }
 
   // MARK: - Periodic diagnostics (1 s aggregate, spam-free)
 
@@ -243,6 +494,16 @@ public final class PlaybackController {
   /// normal drain-and-finish path so the engine can wait for the file to
   /// grow and retry. nil = no partial end pending.
   private var prematureEnd: (position: Double, wasError: Bool)?
+  /// End of the EOF drain window (audio plays out) while it is in progress.
+  /// The drain runs one short step per loop iteration so transport commands
+  /// stay responsive during it; nil = not draining.
+  private var drainDeadline: CFTimeInterval?
+  /// Media time up to which packets have been READ since the last demuxer
+  /// reposition (max pts + duration). The read cursor runs up to
+  /// maxAudioAheadSeconds ahead of the playback clock, so this — not the
+  /// clock — is what an EOF has to be compared with to tell a short file
+  /// from a complete one.
+  private var readEnd: Double?
 
   // Clock
   private var startMonotonic: CFTimeInterval = 0
@@ -271,10 +532,6 @@ public final class PlaybackController {
     nodeClockLock.unlock()
   }
 
-  /// Published state (read from MainActor).
-  private(set) var isPlaying = false
-  private(set) var isPaused = false
-
   /// Frames are broadcast to every registered view. A single weak slot was
   /// stealable: with two windows, updateNSView re-registered both views on
   /// every publish and the loser's view went permanently black ("video
@@ -301,21 +558,20 @@ public final class PlaybackController {
 
   init() {}
 
-  /// Sets the frame sink list (MainActor) and a callback run on MainActor
-  /// after each state change. Registering the same view twice is a no-op.
+  /// Installs the MainActor callbacks. Called ONCE, at engine init, before the
+  /// pipeline ever runs: the callbacks are read from the pipeline thread
+  /// without a lock, so they must never be reassigned afterwards (views
+  /// register through `addSink`, which touches only the locked sink list).
   func configure(
-    sink: (any VideoFrameSink)?, onStateChange: (@MainActor () -> Void)?,
-    onPartialEnd: (@MainActor (_ position: Double, _ wasError: Bool) -> Void)? = nil
+    onStateChange: @escaping @MainActor () -> Void,
+    onPartialEnd: @escaping @MainActor (_ position: Double, _ wasError: Bool) -> Void
   ) {
-    if let sink { registerSink(sink) }
-    if onStateChange != nil { self.onMain = onStateChange }
-    // Only overwrite when provided: `registerSink` re-calls configure with no
-    // onPartialEnd (a default nil), which would otherwise clobber the one set
-    // at engine init.
-    if onPartialEnd != nil { self.onPartialEnd = onPartialEnd }
+    self.onMain = onStateChange
+    self.onPartialEnd = onPartialEnd
   }
 
-  private func registerSink(_ sink: any VideoFrameSink) {
+  /// Adds a frame sink (MainActor). Registering the same view twice is a no-op.
+  func addSink(_ sink: any VideoFrameSink) {
     sinkLock.lock()
     defer { sinkLock.unlock() }
     sinkBoxes.removeAll { $0.sink == nil || ($0.sink === sink) }
@@ -329,26 +585,23 @@ public final class PlaybackController {
     return sinkBoxes.compactMap { $0.sink }
   }
 
+  /// Drops every sink's current frame. The sinks stay registered: a view
+  /// registers once per window, so removing it here left the next file with
+  /// no surface to present to.
   private func clearAllSinks() {
-    sinkLock.lock()
-    let sinks = snapshotSinksLocked()
-    sinkBoxes.removeAll()
-    sinkLock.unlock()
-    for s in sinks { Task { @MainActor in s.clear() } }
+    for s in snapshotSinks() { Task { @MainActor in s.clear() } }
   }
-
-  private func snapshotSinksLocked() -> [any VideoFrameSink] { sinkBoxes.compactMap { $0.sink } }
 
   // MARK: - Open
 
   /// Opens + probes the file. Stops any running pipeline first (so the
   /// probe can take over the demuxer slot), then runs the synchronous probe
-  /// on the dedicated probe queue. Returns media info (MainActor-safe
-  /// values only).
+  /// on the pipeline queue, serialized with every other engine operation.
+  /// Returns media info (MainActor-safe values only).
   func open(_ url: URL) async throws -> NativeMediaInfo {
     stop()
     return try await withCheckedThrowingContinuation { cont in
-      probeQueue.async { [weak self] in
+      pipelineQueue.async { [weak self] in
         guard let self else {
           cont.resume(throwing: NativePlayerError.cannotOpen)
           return
@@ -368,7 +621,7 @@ public final class PlaybackController {
     self.demuxer = demuxer
 
     var video: NativeTrackInfo?
-    var audio: NativeTrackInfo?
+    var audioTracks: [NativeTrackInfo] = []
     var subtitle: NativeTrackInfo?
     var all: [NativeTrackInfo] = []
     for i in 0..<demuxer.trackCount {
@@ -376,7 +629,7 @@ public final class PlaybackController {
       all.append(t)
       switch t.type {
       case MEDIA_TRACK_TYPE_VIDEO.rawValue where video == nil: video = t
-      case MEDIA_TRACK_TYPE_AUDIO.rawValue where audio == nil: audio = t
+      case MEDIA_TRACK_TYPE_AUDIO.rawValue: audioTracks.append(t)
       case MEDIA_TRACK_TYPE_SUBTITLE.rawValue where subtitle == nil: subtitle = t
       default: break
       }
@@ -395,17 +648,19 @@ public final class PlaybackController {
     guard isH264 || isHEVC else {
       throw NativePlayerError.unsupportedVideoCodec(video.codecName)
     }
-    // Supported audio codecs (decoders compiled into the FFmpeg build):
-    // DTS/dca, Dolby Digital (ac3) and Dolby Digital Plus (eac3).
-    if let audio,
-      audio.codecName != "dts" && audio.codecName != "dca" && audio.codecName != "ac3"
-        && audio.codecName != "eac3"
-    {
-      throw NativePlayerError.unsupportedAudioCodec(audio.codecName)
+    // Audio: the container's default-flagged track among the DECODABLE ones,
+    // else the first decodable one. Only gating the first audio track used to
+    // reject e.g. a remux whose first track is TrueHD with an AC3 track after
+    // it. A file whose audio tracks are all undecodable is still refused.
+    let playable = audioTracks.filter { Self.isSupportedAudioCodec($0.codecName) }
+    let audio = playable.first(where: { $0.isDefault }) ?? playable.first
+    if audio == nil, let first = audioTracks.first {
+      throw NativePlayerError.unsupportedAudioCodec(first.codecName)
     }
 
     self.videoStreamIndex = video.id
     self.audioStreamIndex = audio?.id
+    publishAudioStream()
     // Subtitles default OFF. Auto-assigning the first subtitle stream here
     // made the engine render subtitles even when the app's stored pick (or the
     // UI) said off, and re-enabled the container default on every open / the
@@ -423,8 +678,29 @@ public final class PlaybackController {
       url.lastPathComponent, video.codecName, video.timeBase.num, video.timeBase.den,
       audio?.codecName ?? "none", audio?.channelCount ?? 0, audio?.layoutName ?? "-",
       subtitle?.codecName ?? "none", chapters.count)
+    hasMedia = true
     return NativeMediaInfo(
       duration: demuxer.duration, video: video, audio: audio, allTracks: all, chapters: chapters)
+  }
+
+  // MARK: - Codec support
+
+  /// Audio codecs the vendored FFmpeg build can decode (DTS/dca, Dolby Digital
+  /// and Dolby Digital Plus). All three decode to planar float, which is what
+  /// the C bridge's interleaving assumes.
+  static let supportedAudioCodecs: Set<String> = ["dts", "dca", "ac3", "eac3"]
+  static func isSupportedAudioCodec(_ name: String) -> Bool {
+    supportedAudioCodecs.contains(name.lowercased())
+  }
+
+  /// Text subtitle codecs the overlay can render. Bitmap subtitles (PGS,
+  /// VobSub, DVB) carry images, not text — decoding their packets as strings
+  /// produced garbage on screen.
+  static let supportedSubtitleCodecs: Set<String> = [
+    "subrip", "srt", "text", "ass", "ssa", "webvtt",
+  ]
+  static func isSupportedSubtitleCodec(_ name: String) -> Bool {
+    supportedSubtitleCodecs.contains(name.lowercased())
   }
 
   // MARK: - Video decoder setup
@@ -648,6 +924,12 @@ public final class PlaybackController {
   /// length-prefixed NAL stream (MKV HEVC is AVCC-style — a 4-byte length per
   /// NAL). Rewinds the demuxer to the start both before and after so the
   /// playback loop sees the SPS/PPS keyframe at its natural position.
+  ///
+  /// OPEN-ONLY CONTRACT: this is only valid while the demuxer is at the file
+  /// start (probe()). It ends with `seek(to: 0)`, so calling it from the SEEK
+  /// path leaves the demuxer at 0 and silently discards the seek — which is
+  /// exactly what happened when performSeek re-ran setupVideoToolbox (see the
+  /// note in performSeek). Do not add other callers.
   private func inBandHVCC(
     demuxer: FFmpegDemuxer, streamIndex: Int, lengthSize: Int
   ) -> HVCCParSets? {
@@ -681,23 +963,41 @@ public final class PlaybackController {
   /// Session creation shared by H.264 and HEVC: collector box, output callback,
   /// and a VTDecompressionSession sized to the format description's coded dims.
   private func setupVTCommon(formatDesc fd: CMVideoFormatDescription) throws {
+    // The session's generation, captured here on the pipeline queue: the VT
+    // callback compares it with `videoQueueGeneration` (lock-protected)
+    // instead of reading `generation`, which only the pipeline may touch.
+    let sessionGeneration = generation
     // Collector box: VT callback fills the queue on VT's thread.
-    let box = VideoCollectorBox { [weak self] frame in
-      guard let self else { return }
-      self.videoQueueLock.lock()
-      if self.videoQueueGeneration == self.generation { self.videoQueue.append(frame) }
-      self.videoQueueLock.unlock()
-    }
+    let box = VideoCollectorBox(
+      onFrame: { [weak self] frame in
+        guard let self else { return }
+        self.videoQueueLock.lock()
+        if self.videoQueueGeneration == sessionGeneration {
+          self.videoQueue.append(frame)
+        } else {
+          self.vtStale += 1
+        }
+        self.videoQueueLock.unlock()
+      },
+      onOutcome: { [weak self] status, flags, pts in
+        self?.recordVTOutcome(status: status, flags: flags, pts: pts)
+      })
     var cbRecord = VTDecompressionOutputCallbackRecord(
-      decompressionOutputCallback: { refCon, _, status, _, imageBuffer, pts, _ in
-        guard status == noErr, let imageBuffer else { return }
+      decompressionOutputCallback: { refCon, sourceFrameRefCon, status, infoFlags, imageBuffer, pts, _ in
+        // Release the sample-buffer retain made at submission (see
+        // VTSampleBufferHolder in feedVideoPacket). Every callback — decoded,
+        // dropped or failed — balances exactly one submit.
+        if let sourceFrameRefCon {
+          Unmanaged<VTSampleBufferHolder>.fromOpaque(sourceFrameRefCon).release()
+        }
         let box = Unmanaged<VideoCollectorBox>.fromOpaque(refCon!).takeUnretainedValue()
-        let pb = imageBuffer
-        let t = CMTimeGetSeconds(pts)
-        CVPixelBufferLockBaseAddress(pb, .readOnly)
-        let frame = NativeVideoFrame(pts: t, pixelBuffer: pb)
-        CVPixelBufferUnlockBaseAddress(pb, .readOnly)
-        box.onFrame(frame)
+        // Account for the outcome first: a dropped/failed frame still finishes a
+        // slot in flight, so it must be counted or the in-flight backpressure
+        // (videoDecoderSaturated) would think the decoder is still busy and
+        // starve the pipeline forever.
+        box.onOutcome(status, infoFlags, CMTimeGetSeconds(pts))
+        guard status == noErr, let imageBuffer else { return }
+        box.onFrame(NativeVideoFrame(pts: CMTimeGetSeconds(pts), pixelBuffer: imageBuffer))
       }, decompressionOutputRefCon: Unmanaged.passUnretained(box).toOpaque())
 
     var session: VTDecompressionSession?
@@ -706,9 +1006,10 @@ public final class PlaybackController {
     // SCALED every stream to 1920x816, which squeezed 16:9 content into a
     // 2.35:1 aspect. Coded dims keep the rendered aspect correct for every
     // file, HEVC or H.264. HEVC 10-bit sources are requested as 8-bit limited
-    // range (VideoToolbox downconverts); the Metal shader's 8-bit BT.709 math
-    // applies unchanged. To preserve 10-bit later, request
-    // 420YpCbCr10BiPlanarVideoRange and update the shader to 1023-based math.
+    // range (VideoToolbox downconverts); the Metal shader picks the YCbCr
+    // matrix (BT.601/709/2020) from the pixel buffer's attachments. To
+    // preserve 10-bit later, request 420YpCbCr10BiPlanarVideoRange and update
+    // the shader to 1023-based math (HDR transfer functions are not mapped).
     let codedDims = CMVideoFormatDescriptionGetDimensions(fd)
     let attrs: [String: Any] = [
       kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
@@ -740,34 +1041,59 @@ public final class PlaybackController {
 
   // MARK: - Audio setup
 
+  /// How the decoded source is routed to the player node.
+  enum AudioRoute: Equatable {
+    /// Player format == source format (stereo, or 5.1 to a >= 6 ch device).
+    case passthrough
+    /// Mono source duplicated into both channels of a stereo player format.
+    case monoToStereo
+    /// App-side weighted downmix of a multichannel source to stereo.
+    case downmix([ChannelRole])
+  }
+
+  /// Chooses the route for a source. CHANNEL-COUNT INVARIANT (plan Task 8):
+  /// buffer fill must be able to produce every player-format channel from the
+  /// decoded frame, so the only outcomes are an exact passthrough, mono
+  /// duplicated to stereo, or an explicit stereo downmix.
+  ///
+  /// Passthrough is limited to layouts whose Core Audio order provably matches
+  /// FFmpeg's: stereo, and 5.1/5.1(side) (FL FR FC LFE xL xR == MPEG_5_1_A).
+  /// Anything else multichannel is downmixed even on a multichannel device —
+  /// previously such sources fell back to a STEREO player format, which kept
+  /// only the front pair (no dialogue), and a mono source was given a stereo
+  /// format while decoding one channel, which indexed past the decoded buffer.
+  static func audioRoute(
+    sourceChannels: Int, layoutMask: UInt64, layoutName: String?, deviceChannels: Int
+  ) -> AudioRoute {
+    if sourceChannels <= 1 { return .monoToStereo }
+    if sourceChannels == 2 { return .passthrough }
+    if sourceChannels == 6, layoutName == "5.1" || layoutName == "5.1(side)", deviceChannels >= 6 {
+      return .passthrough
+    }
+    if let roles = ChannelRoleMap.roles(forMask: layoutMask), roles.count == sourceChannels {
+      return .downmix(roles)
+    }
+    // No usable native mask: assume the front pair leads (FFmpeg's default
+    // order for every layout) and fold the rest in at the surround gain.
+    return .downmix(
+      [.frontL, .frontR] + Array(repeating: ChannelRole.unknown, count: sourceChannels - 2))
+  }
+
   private func setupAudio(streamIndex: Int) throws {
     guard let demuxer else { throw NativePlayerError.audioDecoderFailed }
+    guard let track = demuxer.track(at: streamIndex),
+      Self.isSupportedAudioCodec(track.codecName)
+    else { throw NativePlayerError.audioDecoderFailed }
     guard let dec = media_audio_decoder_create(demuxer.unsafeHandle, Int32(streamIndex)) else {
       throw NativePlayerError.audioDecoderFailed
     }
+    if let old = audioDecoder { media_audio_decoder_free(old) }
     audioDecoder = dec
-
-    guard let track = demuxer.track(at: streamIndex) else {
-      throw NativePlayerError.audioDecoderFailed
-    }
     audioSourceChannels = track.channelCount
-    let tag: AudioChannelLayoutTag =
-      (track.layoutName == "5.1(side)")
-      ? kAudioChannelLayoutTag_MPEG_5_1_B
-      : (track.layoutName == "5.1")
-        ? kAudioChannelLayoutTag_MPEG_5_1_A : kAudioChannelLayoutTag_Unknown
-    let layout: AVAudioChannelLayout
-    if tag != kAudioChannelLayoutTag_Unknown, let l = AVAudioChannelLayout(layoutTag: tag) {
-      layout = l
-    } else if let l = AVAudioChannelLayout(layoutTag: kAudioChannelLayoutTag_MPEG_5_1_B),
-      track.channelCount == 6
-    {
-      layout = l
-    } else {
-      layout = AVAudioChannelLayout(layoutTag: kAudioChannelLayoutTag_Stereo)!
-    }
-    let sourceFormat = AVAudioFormat(
-      standardFormatWithSampleRate: Double(track.sampleRate), channelLayout: layout)
+    audioFormatMismatchLogged = false
+    // The previous graph (track switch) must stop rendering before it is
+    // replaced; dropping a running engine left its render thread alive.
+    audioEngine?.stop()
 
     let engine = AVAudioEngine()
     let player = AVAudioPlayerNode()
@@ -775,43 +1101,45 @@ public final class PlaybackController {
 
     // --- Audio enhancement (dialogue modes) ---
     // Channel roles come from the FFmpeg native mask; the output-device
-    // channel count decides whether the multichannel source stays
-    // multichannel (passthrough) or is downmixed app-side to stereo.
-    // CHANNEL-COUNT INVARIANT (plan Task 8): the player format's channel
-    // count must equal the decoder frame's channels — the selection below
-    // always yields either the exact source channel count or an explicit
-    // stereo downmix format.
-    let roles = track.layoutMask != 0 ? ChannelRoleMap.roles(forMask: track.layoutMask) : nil
-    let deviceChannels = engine.outputNode.outputFormat(forBus: 0).channelCount
-    // roles.count == channelCount sanity: FFmpeg guarantees mask bitcount ==
-    // channels, but degrade to passthrough if a layout ever disagrees.
-    let needsDownmix =
-      roles != nil && roles!.count == track.channelCount && Int(deviceChannels) < track.channelCount
+    // channel count decides whether a 5.1 source stays multichannel
+    // (passthrough) or is downmixed app-side to stereo.
+    let deviceChannels = Int(engine.outputNode.outputFormat(forBus: 0).channelCount)
+    let route = Self.audioRoute(
+      sourceChannels: track.channelCount, layoutMask: track.layoutMask,
+      layoutName: track.layoutName, deviceChannels: deviceChannels)
+    let sampleRate = Double(track.sampleRate)
     let playerFormat: AVAudioFormat
-    if needsDownmix, let roles {
-      playerFormat = AVAudioFormat(
-        standardFormatWithSampleRate: Double(track.sampleRate), channels: 2)!
-      enhancementLock.lock()
-      downmixRoles = roles
-      downmixMatrices = Dictionary(
-        uniqueKeysWithValues: AudioEnhancementMode.allCases.map { mode in
-          (
-            mode,
-            DownmixMatrix.coefficients(
-              roles: roles, centerGainDB: AudioEnhancementPreset.preset(for: mode).centerGainDB)!
-          )
-        })
-      enhancementLock.unlock()
+    var matrices: [AudioEnhancementMode: [[Float]]] = [:]
+    var roles: [ChannelRole]?
+    switch route {
+    case .passthrough where track.channelCount == 6:
+      guard let layout = AVAudioChannelLayout(layoutTag: kAudioChannelLayoutTag_MPEG_5_1_A) else {
+        throw NativePlayerError.outputDeviceFailed
+      }
+      playerFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channelLayout: layout)
+    case .passthrough, .monoToStereo:
+      guard let f = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) else {
+        throw NativePlayerError.outputDeviceFailed
+      }
+      playerFormat = f
+    case .downmix(let downmixRoles):
+      guard let f = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) else {
+        throw NativePlayerError.outputDeviceFailed
+      }
+      playerFormat = f
+      roles = downmixRoles
+      for mode in AudioEnhancementMode.allCases {
+        matrices[mode] = DownmixMatrix.coefficients(
+          roles: downmixRoles, centerGainDB: AudioEnhancementPreset.preset(for: mode).centerGainDB)
+      }
       NSLog(
         "[Audio] downmix %d ch -> stereo (device %d ch) roles=%@", track.channelCount,
-        deviceChannels, String(describing: roles))
-    } else {
-      playerFormat = sourceFormat
-      enhancementLock.lock()
-      downmixRoles = nil
-      downmixMatrices = [:]
-      enhancementLock.unlock()
+        deviceChannels, String(describing: downmixRoles))
     }
+    enhancementLock.lock()
+    downmixRoles = roles
+    downmixMatrices = matrices
+    enhancementLock.unlock()
     audioFormat = playerFormat
     audioBytesPerFrame = Int(playerFormat.streamDescription.pointee.mBytesPerFrame)
 
@@ -842,8 +1170,19 @@ public final class PlaybackController {
     // Headless/muted testing: PLAYER_MUTE=1 silences the OUTPUT while the
     // full decode->schedule->render pipeline (and the audio master clock)
     // keeps running — the mute-autoplay pattern for automated runs.
-    engine.mainMixerNode.outputVolume =
-      ProcessInfo.processInfo.environment["PLAYER_MUTE"] == "1" ? 0 : 1.0
+    // PLAYER_VOLUME=<0..1> is the graded form (e.g. 0.01 to leave the run
+    // technically audible at ~1%), for when a fully zeroed output is not
+    // wanted; both are loggable evidence that the run was silent.
+    if let raw = ProcessInfo.processInfo.environment["PLAYER_VOLUME"], let v = Double(raw) {
+      engine.mainMixerNode.outputVolume = Float(min(max(v, 0), 1))
+      NSLog("[Audio] output volume %.3f (PLAYER_VOLUME)", min(max(v, 0), 1))
+    } else {
+      engine.mainMixerNode.outputVolume =
+        ProcessInfo.processInfo.environment["PLAYER_MUTE"] == "1" ? 0 : 1.0
+      NSLog(
+        "[Audio] output %@ (PLAYER_MUTE)",
+        ProcessInfo.processInfo.environment["PLAYER_MUTE"] == "1" ? "muted" : "volume 1.0")
+    }
     audioEngine = engine
     audioPlayer = player
     audioIsRunning = false
@@ -881,38 +1220,84 @@ public final class PlaybackController {
 
   /// Starts playback. First start launches the demux loop on the pipeline
   /// queue (the loop then owns the queue until stop/EOF); a resume-while-
-  /// paused goes through the command mailbox instead.
+  /// paused goes through the command mailbox instead. Playing again after
+  /// the end restarts from the beginning (unless a seek was issued since).
   func play() {
-    guard demuxer != nil else { return }
-    if isLoopRunning {
-      submit(.resume)
+    guard hasMedia else { return }
+    commandLock.lock()
+    if loopRunning {
+      Self.enqueue(.resume, into: &commandQueue)
+      commandLock.unlock()
+      commandSignal.signal()
       return
     }
+    // Claim the loop BEFORE dispatching, under the same lock stop() checks:
+    // a stop() issued between this call and the block starting must see the
+    // loop as running and hand it `.stop`, not tear down underneath it.
+    loopRunning = true
+    commandQueue.removeAll { !$0.survivesLoopRestart }
+    let restartFromTop =
+      isEnded && !commandQueue.contains { if case .seek = $0 { true } else { false } }
+    if restartFromTop { commandQueue.insert(.seek(0, exact: true), at: 0) }
+    commandLock.unlock()
     pipelineQueue.async { [weak self] in
-      guard let self, let demuxer = self.demuxer else { return }
-      self.commandLock.lock()
-      self.loopRunning = true
-      self.commandLock.unlock()
+      guard let self else { return }
+      guard let demuxer = self.demuxer else {
+        self.commandLock.lock()
+        self.commandQueue.removeAll()
+        self.loopRunning = false
+        self.commandLock.unlock()
+        return
+      }
       self.isPlaying = true
       self.isPaused = false
-      self.startMonotonic = CACurrentMediaTime()
+      self.isEnded = false
+      self.startMonotonic = CACurrentMediaTime() - self.withState { self._publishedClock }
       self.clockBaseAudio = self.audioPlayer != nil
+      // Fresh playback session: nothing scheduled on this node yet and the
+      // demuxer may well have audio for us, so clear the starvation bookkeeping
+      // (`audioContentEndNode`/`audioSourceExhausted` are the clock anchor and
+      // its EOF release — see their declarations).
+      self.audioContentEndNode = 0
+      self.audioSourceExhausted = false
+      self.drainDeadline = nil
       self.restartAudioPlayer()
       NSLog("[Native] play (audio clock: %@)", self.clockBaseAudio ? "yes" : "no")
       self.demuxLoop(demuxer)
     }
   }
 
-  func pause() { submit(.pause) }
+  /// Pauses the running loop. A no-op when nothing is running (a pause
+  /// queued for a loop that does not exist used to start the next file
+  /// paused).
+  func pause() {
+    commandLock.lock()
+    let running = loopRunning
+    if running { Self.enqueue(.pause, into: &commandQueue) }
+    commandLock.unlock()
+    if running { commandSignal.signal() }
+  }
 
-  /// Stops everything and tears down the pipeline. Synchronous: blocks
-  /// (briefly) until the demux loop has exited, so callers can safely open
-  /// a new file right after. Safe to call when nothing is running.
+  /// Stops everything and tears down the pipeline. Synchronous: returns once
+  /// the teardown has run, so callers can safely open a new file right after.
+  /// Safe to call when nothing is running.
+  ///
+  /// The wait is a `pipelineQueue.sync`, which serializes with whatever owns
+  /// the queue — the running loop (handed `.stop` through the mailbox), a
+  /// probe in flight, or a loop that is just winding down — so the teardown
+  /// never races any of them.
   func stop() {
-    if isLoopRunning {
-      submit(.stop)
-      while isLoopRunning { usleep(1000) }
+    commandLock.lock()
+    let running = loopRunning
+    if running {
+      Self.enqueue(.stop, into: &commandQueue)
     } else {
+      commandQueue.removeAll()
+    }
+    commandLock.unlock()
+    if running { commandSignal.signal() }
+    pipelineQueue.sync {
+      guard !running else { return }  // the loop ran performStop itself
       performStop()
       stateChanged()
     }
@@ -920,7 +1305,13 @@ public final class PlaybackController {
 
   /// Flush + demuxer seek + VT rebuild, run inside the demux loop. PTS
   /// before target is discarded by the scheduler (generation-protected).
-  func seek(to seconds: Double) { submit(.seek(seconds)) }
+  /// `exact == false` (live scrubbing) lets a paused preview show the
+  /// nearest decodable frame instead of decoding all the way to the target.
+  /// Issued while nothing runs, the seek is applied when playback resumes.
+  func seek(to seconds: Double, exact: Bool = true) {
+    submit(.seek(seconds, exact: exact))
+    if !isPlaying { publishClock(seconds) }
+  }
 
   // MARK: - Demux loop
 
@@ -959,6 +1350,17 @@ public final class PlaybackController {
   /// autoreleasepool.
   private func stepLoop(demuxer: FFmpegDemuxer, eof: inout Bool) -> Bool {
     if let cmd = takeCommand() {
+      // Anything that moves the read cursor makes the stream readable again:
+      // cancel a pending end (EOF drain / partial end) so the loop resumes
+      // feeding from the new position instead of finishing.
+      if cmd.repositions {
+        readEnd = nil
+        eof = false
+        prematureEnd = nil
+        drainDeadline = nil
+        audioSourceExhausted = false
+        isEnded = false
+      }
       switch cmd {
       case .resume:
         isPlaying = true
@@ -984,6 +1386,7 @@ public final class PlaybackController {
         stateChanged()
       case .pause:
         pausedClock = currentClock()
+        publishClock(pausedClock)
         NSLog("[Native] pause at %.3f", pausedClock)
         isPlaying = false
         isPaused = true
@@ -997,11 +1400,12 @@ public final class PlaybackController {
           player.reset()
           audioClockOffset = pausedClock
         }
-        audioFramesScheduled = 0
+        audioContentEndNode = 0
         pauseAudioEngine()
         invalidateNodeClock()
         stateChanged()
-      case .seek(let seconds): performSeek(seconds: seconds, demuxer: demuxer)
+      case .seek(let seconds, let exact):
+        performSeek(seconds: seconds, exact: exact, demuxer: demuxer)
       case .switchAudio(let streamIndex):
         performAudioSwitch(streamIndex: streamIndex, demuxer: demuxer)
       case .switchSubtitle(let streamIndex):
@@ -1010,6 +1414,8 @@ public final class PlaybackController {
         performStop()
         commandLock.lock()
         loopRunning = false
+        // Anything queued behind the stop targeted the file just torn down.
+        commandQueue.removeAll()
         commandLock.unlock()
         stateChanged()
         return false
@@ -1023,15 +1429,14 @@ public final class PlaybackController {
       return true
     }
     if let pe = prematureEnd {
-      prematureEnd = nil
       // Incomplete file (still being downloaded): stop WITHOUT the drain
       // path — there is no trailing audio to play out (the data simply is not
       // on disk yet), so draining would wait ~2 s pointlessly before "ending".
       // Signal the engine so it can wait for the file to grow and retry.
+      // A command that raced in first is handled before giving up the loop.
+      guard tryExitLoop() else { return true }
+      prematureEnd = nil
       performStop()
-      commandLock.lock()
-      loopRunning = false
-      commandLock.unlock()
       stateChanged()
       if let cb = onPartialEnd {
         let pos = pe.position
@@ -1041,10 +1446,14 @@ public final class PlaybackController {
       return false
     }
     if eof {
-      drainAndFinish()
-      commandLock.lock()
-      loopRunning = false
-      commandLock.unlock()
+      // Let audio play out one short step at a time, so pause/seek/stop issued
+      // during the drain are handled immediately instead of after it.
+      if drainStep() { return true }
+      // Published before the loop is released, so a play() racing the exit
+      // already sees the end and restarts from the top.
+      isEnded = true
+      guard tryExitLoop() else { return true }
+      finishPlayback()
       return false
     }
     tick(demuxer: demuxer, eof: &eof)
@@ -1060,18 +1469,29 @@ public final class PlaybackController {
     // Present anything due (audio clock master).
     presentDueFrames()
     // Backpressure: audio ahead cap.
-    if audioIndex != nil, let engine = audioEngine, let player = audioPlayer {
-      let ahead = audioSecondsAhead(engine: engine, player: player)
+    if audioIndex != nil, let player = audioPlayer {
+      let ahead = audioSecondsAhead(player: player)
       if ahead > maxAudioAheadSeconds {
         usleep(4000)  // 4 ms
         return
       }
     }
-    // Backpressure: video queue cap.
-    videoQueueLock.lock()
-    let vq = videoQueue.count
-    videoQueueLock.unlock()
-    if vq > maxDecodedVideoFrames {
+    // Backpressure: video decode-ahead cap. When the decoder is at its cap,
+    // surplus video packets are STASHED (compressed, ~200 KB each) instead of
+    // stopping the loop. Stopping the loop also stops the AUDIO feed, and while
+    // the master clock is held (currentClock clamps during a starvation) that
+    // is a deadlock: the clock cannot advance (no audio), so the video queue
+    // cannot drain, so no packet — including the audio that would unblock it —
+    // is ever read again. The stash keeps audio flowing through a starvation,
+    // bounded by maxStashedVideoSeconds.
+    // Flush stashed packets FIRST (they precede anything read now) as far as the
+    // decoder allows, then decide whether the fresh packet may be fed directly.
+    if !pendingVideoPackets.isEmpty { feedPendingVideoPackets() }
+    // Never feed a fresh packet while an older one is still stashed (see
+    // feedPendingVideoPackets: HEVC decode order), and respect both limits —
+    // our decoded queue and VideoToolbox's in-flight depth (see vtSubmitted).
+    let videoDecoderFull = videoFeedBlocked() || !pendingVideoPackets.isEmpty
+    if videoDecoderFull, pendingVideoSeconds >= maxStashedVideoSeconds {
       usleep(4000)
       return
     }
@@ -1089,12 +1509,30 @@ public final class PlaybackController {
         } else {
           NSLog("[Native] EOF")
         }
+        // No more audio can follow: lift the clock clamp so the last frames and
+        // the audio already scheduled can play out instead of the timeline
+        // freezing at the audio content end.
+        audioSourceExhausted = true
         eof = true
         return
       }
       summaryPackets += 1
+      if let pts = pkt.ptsSeconds {
+        let end = pts + (pkt.durationSeconds ?? 0)
+        if end > (readEnd ?? -.infinity) { readEnd = end }
+      }
       if let videoIndex, pkt.streamID == videoIndex {
-        feedVideoPacket(pkt)
+        videoPacketsRead += 1
+        if let target = verifySeekTarget {
+          verifySeekTarget = nil
+          NSLog(
+            "[Native] seek landed: first video pts %.3f (target %.3f, delta %+.3f)",
+            pkt.ptsSeconds ?? -1, target, (pkt.ptsSeconds ?? -1) - target)
+        }
+        // Stash instead of blocking the loop while the decoder is at its cap
+        // (see the backpressure note above — blocking would also stop the audio
+        // feed). Ordered: a fresh packet is only fed when nothing is stashed.
+        if videoDecoderFull { stashVideoPacket(pkt) } else { feedVideoPacket(pkt) }
       } else if let audioIndex, pkt.streamID == audioIndex {
         // Skip pre-target audio after a coarse seek (see
         // discardAudioBefore); the demuxer position is at the
@@ -1115,6 +1553,7 @@ public final class PlaybackController {
       let pos = currentClock()
       NSLog("[Native] demux read error at %.3f: %@", pos, error.localizedDescription)
       prematureEnd = (position: pos, wasError: true)
+      audioSourceExhausted = true  // no audio beyond a read error — see EOF above
       eof = true
     }
   }
@@ -1124,16 +1563,22 @@ public final class PlaybackController {
   /// so playback should wait for the file to grow and retry rather than
   /// ending. A file with no known duration is treated as a real end (we
   /// cannot distinguish, and ending is the safe non-sticky choice).
+  ///
+  /// Compared against the read cursor (`readEnd`): the playback clock trails
+  /// the reader by up to maxAudioAheadSeconds, so comparing the CLOCK flagged
+  /// every complete file as still downloading ~1.5 s before its end — the
+  /// tail was cut and the "Waiting" badge shown instead of ending.
   private func isPrematureEOF(demuxer: FFmpegDemuxer) -> Bool {
     guard let duration = demuxer.duration, duration > 0 else { return false }
-    return currentClock() < duration - 1.0
+    return (readEnd ?? currentClock()) < duration - 1.0
   }
 
   /// Seek internals (flush, keyframe seek, VT rebuild, clock reset). Runs
   /// inside the demux loop — the loop continues after, no restart needed.
-  private func performSeek(seconds: Double, demuxer: FFmpegDemuxer) {
+  private func performSeek(seconds: Double, exact: Bool, demuxer: FFmpegDemuxer) {
     generation &+= 1
     let gen = generation
+    publishClock(seconds)
 
     // Flush decode state.
     if let vtSession {
@@ -1144,7 +1589,7 @@ public final class PlaybackController {
     videoQueue.removeAll()
     videoQueueGeneration = gen
     videoQueueLock.unlock()
-    pendingVideoPackets.removeAll()
+    clearPendingVideoPackets()
     // Discard pre-target video frames: the coarse (keyframe) seek lands
     // BEFORE the target, and presenting the keyframe->target window would
     // fast-forward the video (clock is already at the target) while the
@@ -1152,10 +1597,11 @@ public final class PlaybackController {
     // regression guard with the target drops those frames at the
     // scheduler — mirror of discardAudioBefore for audio.
     lastPresentedPTS = seconds
+    verifySeekTarget = seconds
     NSLog("[Native] seek -> %.3f (gen %llu)", seconds, gen)
 
     if let audioDecoder { media_audio_decoder_flush(audioDecoder) }
-    audioFramesScheduled = 0
+    audioContentEndNode = 0
     if let player = audioPlayer {
       player.stop()
       player.reset()
@@ -1175,10 +1621,30 @@ public final class PlaybackController {
       // Coarse seek lands on the keyframe BEFORE the target; skip
       // pre-target audio so the audio pipeline starts at the target.
       discardAudioBefore = seconds
-      // Rebuild the VT session (stream params may differ after seek).
-      if let vStream = videoStreamIndex, let vTrack = demuxer.track(at: vStream) {
+      // Rebuild the VT SESSION from the format description parsed at open.
+      //
+      // NEVER re-run setupVideoToolbox here. It re-parses CodecPrivate and, for
+      // streams whose parameter sets are IN-BAND (a bare 23-byte hvcC with
+      // numOfArrays == 0 — video.mkv is exactly this), falls into inBandHVCC,
+      // which REWINDS THE DEMUXER TO 0. That silently discards the seek: the
+      // demux loop then walks the media from the start while the audio clock
+      // free-runs, and playback resumes with the picture that far behind the
+      // sound. Measured before the fix (seek to 287.269 s on a 4K HEVC file):
+      // 23.6 s of walking at ~300 dropped frames/s, `aud=-23.2s`, then
+      // `drift=-22.07s` with the picture stuck ~7 fps behind the audio.
+      //
+      // Codec parameters cannot change across a seek within one file, and
+      // `vtFormatDesc` survives the session invalidation above (it is a
+      // separate CoreMedia object we still own), so the session is simply
+      // recreated from it. setupVTCommon is the shared session builder.
+      if let fd = vtFormatDesc {
+        try setupVTCommon(formatDesc: fd)
+      } else if let vStream = videoStreamIndex, let vTrack = demuxer.track(at: vStream) {
         try setupVideoToolbox(demuxer: demuxer, video: vTrack)
       }
+      // New session: restart the decoder accounting (in-flight frames of the
+      // invalidated session never come back).
+      resetVTCounters()
       startMonotonic = CACurrentMediaTime() - seconds
       audioClockOffset = seconds
       // A seek while paused moves the frozen position, so the timer
@@ -1189,7 +1655,7 @@ public final class PlaybackController {
         // (arrow-arrow skip, slider scrub) shows it immediately instead of
         // freezing on the old frame until resume. Decode + present the
         // nearest frame at/after the target and hold it.
-        presentPausedPreview(target: seconds, demuxer: demuxer)
+        presentPausedPreview(target: seconds, exact: exact, demuxer: demuxer)
       }
       stateChanged()
     } catch { stateChanged() }
@@ -1205,16 +1671,21 @@ public final class PlaybackController {
   /// files (otherwise decoding the keyframe->target window piles up a whole
   /// GOP of decoded frames before the target appears). Leaves the frame held
   /// by every sink; resume re-reads from pausedClock-0.05.
-  private func presentPausedPreview(target: Double, demuxer: FFmpegDemuxer) {
+  ///
+  /// A non-exact (scrubbing) preview shows the FIRST decoded frame — the
+  /// keyframe at/before the target — which is one decode instead of a GOP's
+  /// worth. The preview also yields as soon as another command is pending, so
+  /// a drag's next position is never queued behind this one's decode.
+  private func presentPausedPreview(target: Double, exact: Bool, demuxer: FFmpegDemuxer) {
     let deadline = CACurrentMediaTime() + 1.5
-    while CACurrentMediaTime() < deadline {
+    while CACurrentMediaTime() < deadline, !hasPendingCommand {
       videoQueueLock.lock()
       // Drop pre-target frames each poll (keeps the queue bounded) and look
       // for a candidate at/after the target.
-      videoQueue.removeAll { $0.pts < target - displaySlack }
+      if exact { videoQueue.removeAll { $0.pts < target - displaySlack } }
       videoQueue.sort { $0.pts < $1.pts }
       var frame: NativeVideoFrame?
-      if let first = videoQueue.first, first.pts >= target - displaySlack {
+      if let first = videoQueue.first, !exact || first.pts >= target - displaySlack {
         frame = first
         videoQueue.removeFirst()
       }
@@ -1249,21 +1720,37 @@ public final class PlaybackController {
   private func performStop() {
     generation &+= 1
     NSLog("[Native] stop")
+    videoQueueLock.lock()
     videoQueueGeneration = generation  // keep the VT collector's gate in sync
+    videoQueueLock.unlock()
     isPlaying = false
     isPaused = false
+    isEnded = false
+    hasMedia = false
+    publishClock(0)
     audioClockOffset = 0
     pausedClock = 0
     discardAudioBefore = nil
-    // Per-file counters that must NOT survive a teardown. `audioFramesScheduled`
-    // counts samples scheduled ahead on the (now-stopped) engine; a left-over
-    // value makes the next file's audioSecondsAhead compute as `stale/sr - 0`
-    // on a freshly-started node, tripping the audio-ahead backpressure gate on
-    // every tick so video is never demuxed/presented — the "frozen last frame
-    // until pause and unpause" bug (pause resets this to 0). `lastPresentedPTS`
-    // would otherwise drop every frame of the new file (pts << stale value).
-    // Mirrors the resets in pause()/performSeek()/performAudioSwitch().
-    audioFramesScheduled = 0
+    prematureEnd = nil
+    drainDeadline = nil
+    readEnd = nil
+    // Per-file diagnostics restart with the file.
+    videoPacketsRead = 0
+    vtNonMonotonic = 0
+    lastSubmittedPTS = nil
+    summaryLastTime = 0
+    // Per-file counters that must NOT survive a teardown. `audioContentEndNode`
+    // anchors the audio clock to the scheduled content; a left-over value makes
+    // the next file's audioSecondsAhead compute as `stale - 0` on a freshly
+    // started node, tripping the audio-ahead backpressure gate on every tick so
+    // video is never demuxed/presented — the "frozen last frame until pause and
+    // unpause" bug (pause resets this to 0). `lastPresentedPTS` would otherwise
+    // drop every frame of the new file (pts << stale value). Mirrors the resets
+    // in pause()/performSeek()/performAudioSwitch(), and `play()` (a stop()
+    // followed by play() without a re-open keeps the same node).
+    audioContentEndNode = 0
+    audioSourceExhausted = false
+    resetVTCounters()
     lastPresentedPTS = nil
     videoQueueLock.lock()
     videoQueue.removeAll()
@@ -1273,10 +1760,17 @@ public final class PlaybackController {
       self.vtSession = nil
     }
     if let audioEngine { audioEngine.stop() }
+    audioEngine = nil
+    audioPlayer = nil
+    audioFormat = nil
     if let audioDecoder {
       media_audio_decoder_free(audioDecoder)
       self.audioDecoder = nil
     }
+    clearPendingVideoPackets()
+    clearSubtitleCues()
+    subtitleCodec = ""
+    vtFormatDesc = nil
     enhancementChain = nil
     enhancementLock.lock()
     downmixRoles = nil
@@ -1287,39 +1781,94 @@ public final class PlaybackController {
     demuxer = nil
     videoStreamIndex = nil
     audioStreamIndex = nil
+    publishAudioStream()
     subtitleStreamIndex = nil
     clearAllSinks()
   }
 
+  /// True when the decoder must not be handed another frame: the decoded queue
+  /// is at its target depth, or VideoToolbox already has too many frames in
+  /// flight (past that point it drops what it cannot keep up with).
+  private func videoFeedBlocked() -> Bool {
+    if videoQueueDepth > maxDecodedVideoFrames { return true }
+    return videoDecoderSaturated()
+  }
+
+  /// Feeds stashed video packets in order, while the decoder has room.
+  ///
+  /// STRICT ORDER IS MANDATORY: HEVC frames reference earlier frames in DECODE
+  /// order (the container's packet order), so feeding a newly read packet ahead
+  /// of an earlier stashed one corrupts the reference chain — VideoToolbox then
+  /// answers kVTVideoDecoderMalfunctionErr (-12909) for every frame until the
+  /// next IRAP and the picture stops. Measured on a 4K Main10 file: ~10 s of
+  /// total decode failure followed by a short recovery, repeating (the file's
+  /// IRAP spacing). The caller therefore stashes whenever this stash is still
+  /// non-empty, never feeding "fresh" frames past it.
   private func feedPendingVideoPackets() {
-    let pending = pendingVideoPackets
+    while !pendingVideoPackets.isEmpty, !videoFeedBlocked() {
+      let pkt = pendingVideoPackets.removeFirst()
+      pendingVideoSeconds = max(0, pendingVideoSeconds - stashSeconds(pkt))
+      feedVideoPacket(pkt)
+    }
+  }
+
+  /// Buffers one surplus video packet (compressed bytes only) for later decode.
+  private func stashVideoPacket(_ pkt: DemuxPacket) {
+    pendingVideoPackets.append(pkt)
+    pendingVideoSeconds += stashSeconds(pkt)
+  }
+
+  /// Seconds of video one stashed packet represents (packet duration in the
+  /// video stream time base; a frame duration fallback for unknown durations).
+  private func stashSeconds(_ pkt: DemuxPacket) -> Double {
+    guard pkt.duration > 0 else { return 1.0 / contentFps }
+    return Double(pkt.duration) * Double(videoTB.num) / Double(videoTB.den)
+  }
+
+  private func clearPendingVideoPackets() {
     pendingVideoPackets.removeAll()
-    for pkt in pending { feedVideoPacket(pkt) }
+    pendingVideoSeconds = 0
   }
 
   private func feedVideoPacket(_ pkt: DemuxPacket) {
     guard let vtSession, let fd = vtFormatDesc else { return }
-    let frameDur = CMTime(value: 1001, timescale: 24000)
+    // The packet's own duration when the container has one; 23.976 fps is
+    // only the fallback for packets without it.
+    let frameDur =
+      pkt.duration > 0
+      ? CMTime(value: pkt.duration * videoTB.num, timescale: videoTB.den)
+      : CMTime(value: 1001, timescale: 24000)
     var timing = CMSampleTimingInfo(
       duration: frameDur, presentationTimeStamp: .invalid, decodeTimeStamp: .invalid)
     if pkt.pts != Int64.min {
       timing.presentationTimeStamp = CMTime(value: pkt.pts * videoTB.num, timescale: videoTB.den)
     } else if let last = lastPresentedPTS {
-      timing.presentationTimeStamp = CMTime(seconds: last + 0.0417, preferredTimescale: 24000)
+      timing.presentationTimeStamp = CMTime(
+        seconds: last + frameDur.seconds, preferredTimescale: 24000)
     } else {
       timing.presentationTimeStamp = .zero
     }
 
     var block: CMBlockBuffer?
+    // The block buffer OWNS its bytes (allocated here, packet copied in), so
+    // its lifetime is the sample buffer's lifetime rather than the local
+    // `Data`'s. Referencing the `Data` storage with `kCFAllocatorNull` is only
+    // safe while decode is synchronous; when the session ran with
+    // asynchronous decompression it decoded from dangling storage (measured:
+    // `vterr` climbing at the content rate, video ~12 fps of 24).
+    let n = pkt.data.count
     guard
-      pkt.data.withUnsafeBytes({ raw in
-        CMBlockBufferCreateWithMemoryBlock(
-          allocator: kCFAllocatorDefault,
-          memoryBlock: UnsafeMutableRawPointer(mutating: raw.baseAddress!),
-          blockLength: pkt.data.count, blockAllocator: kCFAllocatorNull, customBlockSource: nil,
-          offsetToData: 0, dataLength: pkt.data.count, flags: 0, blockBufferOut: &block) == noErr
-      }), let block
+      CMBlockBufferCreateWithMemoryBlock(
+        allocator: kCFAllocatorDefault, memoryBlock: nil, blockLength: n,
+        blockAllocator: kCFAllocatorDefault, customBlockSource: nil, offsetToData: 0,
+        dataLength: n, flags: 0, blockBufferOut: &block) == noErr, let block
     else { return }
+    let copied = pkt.data.withUnsafeBytes { raw -> OSStatus in
+      guard let base = raw.baseAddress else { return -1 }
+      return CMBlockBufferReplaceDataBytes(
+        with: base, blockBuffer: block, offsetIntoDestination: 0, dataLength: n)
+    }
+    guard copied == noErr else { return }
 
     var sbuf: CMSampleBuffer?
     var sampleSize = pkt.data.count
@@ -1330,9 +1879,30 @@ public final class PlaybackController {
         sampleTimingEntryCount: 1, sampleTimingArray: &timing, sampleSizeEntryCount: 1,
         sampleSizeArray: &sampleSize, sampleBufferOut: &sbuf) == noErr, let sbuf
     else { return }
+    // Keep the sample buffer alive until the decoder's output callback fires:
+    // the callback receives this holder as `sourceFrameRefCon` and releases
+    // it. With the synchronous decode below that happens before DecodeFrame
+    // returns; the holder keeps the lifetime correct should asynchronous
+    // decompression ever be re-enabled (it once produced -12909 for every
+    // frame whose sample buffer was freed mid-decode).
+    if let last = lastSubmittedPTS, let t = pkt.ptsSeconds, t <= last {
+      vtNonMonotonic += 1
+    }
+    lastSubmittedPTS = pkt.ptsSeconds
+    let holder = VTSampleBufferHolder(sbuf)
+    // Decode synchronously (no _EnableAsynchronousDecompression). Isolated
+    // verification of this configuration — same file, same in-band parameter-set
+    // recovery, same attributes — decodes 600/600 frames with zero failures
+    // (Tests/NativePoC/VTDecode/hevc-decode-probe.swift). Synchronous decode
+    // also keeps the sample-buffer lifetime trivially correct: the callback has
+    // already run by the time this call returns.
     VTDecompressionSessionDecodeFrame(
-      vtSession, sampleBuffer: sbuf, flags: [._EnableAsynchronousDecompression], frameRefcon: nil,
-      infoFlagsOut: nil)
+      vtSession, sampleBuffer: sbuf, flags: [],
+      frameRefcon: Unmanaged.passRetained(holder).toOpaque(), infoFlagsOut: nil)
+    _ = holder  // the output callback releases it (sync: during the call above)
+    videoQueueLock.lock()
+    vtSubmitted += 1
+    videoQueueLock.unlock()
   }
 
   private func feedAudioPacket(_ pkt: DemuxPacket) {
@@ -1345,19 +1915,15 @@ public final class PlaybackController {
     cpkt.dts = pkt.dts
     cpkt.duration = pkt.duration
     cpkt.keyframe = pkt.keyframe ? 1 : 0
-    let copied = pkt.data.withUnsafeBytes { raw -> Bool in
+    // The bridge only reads the bytes during the call (libavcodec copies a
+    // non-refcounted packet), so lend it the Data's storage — no malloc copy.
+    let sent = pkt.data.withUnsafeBytes { raw -> Bool in
       guard let base = raw.baseAddress else { return false }
-      let buf = malloc(pkt.data.count)
-      guard let buf else { return false }
-      memcpy(buf, base, pkt.data.count)
-      cpkt.data = buf.assumingMemoryBound(to: UInt8.self)
-      cpkt.size = pkt.data.count
-      return true
+      cpkt.data = UnsafeMutablePointer(mutating: base.assumingMemoryBound(to: UInt8.self))
+      cpkt.size = raw.count
+      return media_audio_decoder_send(audioDecoder, &cpkt) == MEDIA_RESULT_OK
     }
-    guard copied else { return }
-    defer { media_packet_free(&cpkt) }
-
-    guard media_audio_decoder_send(audioDecoder, &cpkt) == MEDIA_RESULT_OK else {
+    guard sent else {
       if !audioSendFailedLogged {
         audioSendFailedLogged = true
         NSLog("[Native] audio decoder send failed (corrupt stream?)")
@@ -1381,7 +1947,7 @@ public final class PlaybackController {
       // (The old code silently broke 7.1 sources, which collapsed to a
       // 2-ch player format while the decoder emitted 8 channels. Note
       // the player format may legitimately differ — app-side downmix.)
-      guard decodeChannels == audioSourceChannels else {
+      guard decodeChannels > 0, decodeChannels == audioSourceChannels else {
         if !audioFormatMismatchLogged {
           audioFormatMismatchLogged = true
           NSLog(
@@ -1416,22 +1982,70 @@ public final class PlaybackController {
           }
         }
       } else {
+        // Passthrough maps channel-for-channel; a mono source feeds both
+        // stereo channels (audioRoute guarantees outChannels == decodeChannels
+        // except for that case).
         for ch in 0..<outChannels {
           guard let dst = pcm.floatChannelData?[ch] else { continue }
-          for i in 0..<n { dst[i] = interleaved[i * decodeChannels + ch] }
+          let src = min(ch, decodeChannels - 1)
+          for i in 0..<n { dst[i] = interleaved[i * decodeChannels + src] }
         }
       }
+      // Land this content on the node's timeline before scheduling it: if the
+      // node has already run past the previously scheduled content, it was
+      // starved and the media clock held at the content end (see currentClock).
+      // Re-anchoring here makes the resuming content continue the media
+      // timeline instead of landing a starvation further behind it.
+      let nodeNow = nodeSeconds(player: player) ?? 0
+      reanchorAudioClockIfStarved(nodeNow: nodeNow)
       player.scheduleBuffer(pcm, at: nil)
-      audioFramesScheduled += n
+      audioContentEndNode = max(audioContentEndNode, nodeNow) + Double(n) / playerFormatSampleRate()
     }
   }
 
+  /// Called from feedAudioPacket for every PCM frame scheduled (pipeline queue).
+  ///
+  /// `audioContentEndNode` is the node-time at which the scheduled audio runs
+  /// out. When the node has already passed it the node was STARVED: the media
+  /// clock (currentClock) held at the content end while the node's own clock ran
+  /// on through silence. Shifting the offset by the starved duration moves the
+  /// media timeline's mapping so the content resuming now continues from the
+  /// held position — leaving the offset alone would place it exactly one
+  /// starvation behind the picture, forever (the accumulating audio-delay bug).
+  private func reanchorAudioClockIfStarved(nodeNow: Double) {
+    guard nodeNow > audioContentEndNode else { return }
+    let starved = nodeNow - audioContentEndNode
+    // A gap far longer than a decode warm-up (or a dead audio pipeline): the
+    // media clock already ran on because currentClock released the clamp at
+    // audioStarveHoldMaxSeconds, so re-anchoring here would jump the timeline
+    // BACKWARDS. Leave the mapping alone — this is the pre-clamp behavior, and
+    // the only case where the audio really can end up behind the picture.
+    if starved >= audioStarveHoldMaxSeconds {
+      NSLog("[Native] audio starved %.1fs — clock left free-running (no re-anchor)", starved)
+      return
+    }
+    audioClockOffset -= starved
+    audioStarvedSeconds += starved
+    audioStarvedWindow += starved
+    NSLog(
+      "[Native] audio starved %.3fs — clock re-anchored (offset %.3f, held total %.3f)",
+      starved, audioClockOffset, audioStarvedSeconds)
+  }
+
+  /// The sample rate the scheduled PCM runs at (the player format's rate).
+  private func playerFormatSampleRate() -> Double {
+    audioFormat?.sampleRate ?? 48000
+  }
+
   /// Seconds of audio currently scheduled ahead of the player's position.
-  private func audioSecondsAhead(engine: AVAudioEngine, player: AVAudioPlayerNode) -> Double {
+  /// Negative = the node is STARVED (the clock clamp in currentClock is holding
+  /// the media timeline while the node renders silence) — the honest starvation
+  /// signal, logged as `aud=` in the 1 s summary.
+  private func audioSecondsAhead(player: AVAudioPlayerNode) -> Double {
     // Same allocation-avoidance as currentClock(): read the node clock
     // through the per-tick cache instead of calling playerTime directly.
     let played = nodeSeconds(player: player) ?? 0
-    return Double(audioFramesScheduled) / Double(audioFormat?.sampleRate ?? 48000) - played
+    return audioContentEndNode - played
   }
 
   /// Player-node time in seconds via the per-iteration cache (one
@@ -1458,6 +2072,7 @@ public final class PlaybackController {
   private func presentDueFrames() {
     guard isPlaying else { return }
     let clock = currentClock()
+    publishClock(clock)
     videoQueueLock.lock()
     // Reorder by PTS (VT emits decode order with B-frames).
     videoQueue.sort { $0.pts < $1.pts }
@@ -1499,25 +2114,45 @@ public final class PlaybackController {
     if summaryLastTime == 0 {
       summaryLastTime = now
       summaryDroppedBase = droppedFrames
+      summaryPresented = 0
+      summaryPackets = 0
       return
     }
     let dt = now - summaryLastTime
     guard dt >= 1.0 else { return }
+    // Decoder/scheduler split for the window, plus the queue's pts relation to
+    // the clock: `qhead`/`qtail` are the queued frames' pts minus the clock
+    // (negative = overdue but not presented, positive = waiting for the clock).
+    // An empty queue logs `empty`.
+    videoQueueLock.lock()
+    let head = videoQueue.map { $0.pts }.min()
+    let tail = videoQueue.map { $0.pts }.max()
+    let vtR = vtReturned
+    let vtS = vtStale
+    videoQueueLock.unlock()
+    let sub = max(0, vtSubmitted - summaryVTSubmitted)
+    let ret = max(0, vtR - summaryVTReturned)
+    let headStr = head.map { String(format: "%+.3f", $0 - clock) } ?? "empty"
+    let tailStr = tail.map { String(format: "%+.3f", $0 - clock) } ?? "empty"
     NSLog(
-      "[Native] 1s pos=%.3f fps=%.1f/%.2f drop=%d drift=%+.3f vq=%d pkt=%d aud=%.2fs (mode=%@ ch=%d)",
+      "[Native] 1s pos=%.3f fps=%.1f/%.2f drop=%d drift=%+.3f vq=%d qhead=%@ qtail=%@ pkt=%d vid=%d aud=%.2fs starve=%.2fs sub=%d ret=%d nonmono=%d vtdrop=%d vterr=%d stale=%d (mode=%@ ch=%d)",
       clock, Double(summaryPresented) / dt, contentFps, droppedFrames - summaryDroppedBase,
-      summaryDrift, videoQueueDepth, summaryPackets, audioSecondsAheadNow(), currentMode().rawValue,
-      audioFormat?.channelCount ?? 0)
+      summaryDrift, videoQueueDepth, headStr, tailStr, summaryPackets, videoPacketsRead,
+      audioSecondsAheadNow(), audioStarvedWindow, sub, ret, vtNonMonotonic, vtDropped, vtErrors,
+      vtS, currentMode().rawValue, audioFormat?.channelCount ?? 0)
     summaryLastTime = now
     summaryPresented = 0
     summaryPackets = 0
     summaryDroppedBase = droppedFrames
+    summaryVTSubmitted = vtSubmitted
+    summaryVTReturned = vtR
+    audioStarvedWindow = 0
   }
 
   /// Seconds of audio scheduled ahead of the player (0 when no audio engine).
   private func audioSecondsAheadNow() -> Double {
-    guard let engine = audioEngine, let player = audioPlayer else { return 0 }
-    return audioSecondsAhead(engine: engine, player: player)
+    guard let player = audioPlayer else { return 0 }
+    return audioSecondsAhead(player: player)
   }
 
   private func currentClock() -> Double {
@@ -1525,38 +2160,120 @@ public final class PlaybackController {
     // a live clock here (audio playerTime or monotonic) would keep the
     // position/timer advancing during a pause.
     if isPaused { return pausedClock }
-    if clockBaseAudio, let engine = audioEngine, let player = audioPlayer,
-      let nodeSeconds = nodeSeconds(player: player)
-    {
+    if clockBaseAudio, let player = audioPlayer, let nodeSeconds = nodeSeconds(player: player) {
+      // Clamp to the scheduled audio content. The player node's clock free-runs
+      // through a starvation (its render callback keeps producing silence), so
+      // without this every starved second would slide the audio that far behind
+      // the clock — and the video with it, permanently. Holding at the content
+      // end freezes the media timeline instead; feedAudioPacket (reanchor, below)
+      // shifts the offset when feeding resumes so playback continues from the
+      // held position rather than behind it.
+      if !audioSourceExhausted, audioContentEndNode > 0,
+        nodeSeconds > audioContentEndNode + 0.002,
+        nodeSeconds - audioContentEndNode < audioStarveHoldMaxSeconds
+      {
+        return audioContentEndNode + audioClockOffset
+      }
       return nodeSeconds + audioClockOffset
     }
     return CACurrentMediaTime() - startMonotonic
   }
 
-  /// MainActor-safe clock read (see NativeSomePlayer.refreshFromController).
-  func currentClockSafe() -> Double { currentClock() }
+  /// MainActor-safe clock read (see NativeSomePlayer.refreshFromController):
+  /// the value the pipeline last published (every tick, pause and seek).
+  /// Computing the clock here would read the audio node and pipeline-owned
+  /// fields from the main thread.
+  func currentClockSafe() -> Double { withState { _publishedClock } }
 
   // MARK: - Subtitles (SRT Phase A)
 
   /// Parses a subtitle packet into a cue. SubRip packets in MKV carry the
-  /// plain text (with SRT markup stripped); timing comes from pts/duration
-  /// in the stream time base (1/1000 for MKV).
+  /// plain text (with SRT markup stripped); ASS/SSA packets carry the event
+  /// fields in front of the text. Timing comes from pts/duration in the
+  /// packet's stream time base.
   private func collectSubtitlePacket(_ pkt: DemuxPacket) {
-    guard pkt.pts != Int64.min else { return }
-    var text = String(data: pkt.data, encoding: .utf8) ?? String(data: pkt.data, encoding: .utf16)
-    text = text?.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard let text, !text.isEmpty else { return }
-
-    let start = Double(pkt.pts) / 1000.0
-    let durTb = pkt.duration > 0 ? Double(pkt.duration) / 1000.0 : 2.0
-    let cue = SubtitleCue(start: start, end: start + durTb, text: text)
+    guard let start = pkt.ptsSeconds,
+      let text = Self.subtitleText(from: pkt.data, codec: subtitleCodec)
+    else { return }
+    let cue = SubtitleCue(start: start, end: start + (pkt.durationSeconds ?? 2.0), text: text)
     subtitleCuesLock.lock()
-    subtitleCues.append(cue)
+    let inserted = Self.insertCue(cue, into: &subtitleCues)
+    let count = subtitleCues.count
     subtitleCuesLock.unlock()
     // Diagnostic: log the first few cues.
-    if subtitleCues.count <= 4 {
+    if inserted, count <= 4 {
       NSLog("[Native] subtitle cue %.3f-%.3f: %@", cue.start, cue.end, cue.text)
     }
+  }
+
+  /// Display text of one subtitle packet, or nil when there is nothing to show
+  /// (empty, undecodable, or a codec the overlay cannot render).
+  static func subtitleText(from data: Data, codec: String) -> String? {
+    let codec = codec.lowercased()
+    guard isSupportedSubtitleCodec(codec),
+      var text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
+    else { return nil }
+    if codec == "ass" || codec == "ssa" {
+      // Matroska ASS block: ReadOrder,Layer,Style,Name,MarginL,MarginR,
+      // MarginV,Effect,Text — the text is everything after the 8th comma (it
+      // may itself contain commas). A full "Dialogue:" line has 9 fields
+      // before the text.
+      let isDialogueLine = text.hasPrefix("Dialogue:")
+      let fields = text.split(
+        separator: ",", maxSplits: isDialogueLine ? 9 : 8, omittingEmptySubsequences: false)
+      text = fields.count > (isDialogueLine ? 9 : 8) ? String(fields.last!) : ""
+      // Override blocks ({\i1}, {\pos(..)}) and ASS escapes.
+      text = text.replacingOccurrences(of: "\\{[^}]*\\}", with: "", options: .regularExpression)
+      text = text.replacingOccurrences(of: "\\N", with: "\n")
+        .replacingOccurrences(of: "\\n", with: "\n")
+        .replacingOccurrences(of: "\\h", with: " ")
+    }
+    text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    return text.isEmpty ? nil : text
+  }
+
+  /// Inserts `cue` keeping `cues` sorted by start time, skipping an exact
+  /// duplicate. A backward seek, a resume rewind or a track re-seek re-reads
+  /// packets that were already collected; appending them used to leave the
+  /// array unsorted and full of duplicates, and the binary search in
+  /// `activeCue` then missed cues (subtitles vanished after seeking back).
+  /// Returns false when the cue was already present.
+  @discardableResult
+  static func insertCue(_ cue: SubtitleCue, into cues: inout [SubtitleCue]) -> Bool {
+    var lo = 0
+    var hi = cues.count
+    while lo < hi {
+      let mid = (lo + hi) / 2
+      if cues[mid].start <= cue.start { lo = mid + 1 } else { hi = mid }
+    }
+    // `lo` is the first index with a later start; equal starts sit before it.
+    var i = lo - 1
+    while i >= 0, cues[i].start == cue.start {
+      if cues[i] == cue { return false }
+      i -= 1
+    }
+    cues.insert(cue, at: lo)
+    return true
+  }
+
+  /// The cue on screen at `time` in start-sorted `cues`: the latest-starting
+  /// cue that has started and not yet ended. Looks back a few cues so a long
+  /// cue overlapped by a shorter later one is still found.
+  static func activeCue(at time: Double, in cues: [SubtitleCue]) -> SubtitleCue? {
+    var lo = 0
+    var hi = cues.count
+    while lo < hi {
+      let mid = (lo + hi) / 2
+      if cues[mid].start <= time { lo = mid + 1 } else { hi = mid }
+    }
+    var i = lo - 1
+    var checked = 0
+    while i >= 0, checked < 8 {
+      if time <= cues[i].end { return cues[i] }
+      i -= 1
+      checked += 1
+    }
+    return nil
   }
 
   /// Active subtitle cue at `time` (seconds), or nil when subtitles are off
@@ -1564,24 +2281,7 @@ public final class PlaybackController {
   func subtitleCue(at time: Double) -> SubtitleCue? {
     subtitleCuesLock.lock()
     defer { subtitleCuesLock.unlock() }
-    guard !subtitleCues.isEmpty else { return nil }
-    // Cues arrive in demux order (ascending start) — binary search.
-    var lo = 0
-    var hi = subtitleCues.count - 1
-    var result: SubtitleCue?
-    while lo <= hi {
-      let mid = (lo + hi) / 2
-      let c = subtitleCues[mid]
-      if time < c.start {
-        hi = mid - 1
-      } else if time > c.end {
-        lo = mid + 1
-      } else {
-        result = c
-        break
-      }
-    }
-    return result
+    return Self.activeCue(at: time, in: subtitleCues)
   }
 
   /// Clears collected cues (track switch / seek).
@@ -1601,6 +2301,21 @@ public final class PlaybackController {
 
   private func performAudioSwitch(streamIndex: Int, demuxer: FFmpegDemuxer) {
     guard streamIndex != audioStreamIndex else { return }
+    // Validate BEFORE tearing anything down: switching to a track the build
+    // cannot decode used to free the working decoder first and leave the
+    // file silent with no error.
+    guard let track = demuxer.track(at: streamIndex),
+      track.type == MEDIA_TRACK_TYPE_AUDIO.rawValue, Self.isSupportedAudioCodec(track.codecName)
+    else {
+      NSLog("[Native] audio switch to stream %d refused (not a decodable audio track)", streamIndex)
+      stateChanged()
+      return
+    }
+    // The position must be read before the node is reset below: afterwards
+    // the node clock restarts at 0 and currentClock() would report the last
+    // seek/pause anchor instead, jumping playback back to it.
+    let current = currentClock()
+    let previous = audioStreamIndex
 
     generation &+= 1
     let gen = generation
@@ -1608,39 +2323,47 @@ public final class PlaybackController {
     videoQueue.removeAll()
     videoQueueGeneration = gen  // in-flight frames from the old stream are stale
     videoQueueLock.unlock()
-    pendingVideoPackets.removeAll()
+    clearPendingVideoPackets()
     // Flush the old audio decoder + scheduled buffers.
     if let audioDecoder {
       media_audio_decoder_free(audioDecoder)
       self.audioDecoder = nil
     }
-    audioFramesScheduled = 0
+    audioContentEndNode = 0
     if let player = audioPlayer {
       player.stop()
       player.reset()
-      // Restart the node so the new stream's buffers actually play
-      // (the engine itself stays running across the switch).
-      restartAudioPlayer()
     }
     invalidateNodeClock()
-    guard let track = demuxer.track(at: streamIndex), track.type == MEDIA_TRACK_TYPE_AUDIO.rawValue
-    else {
-      stateChanged()
-      return
-    }
     do {
       try setupAudio(streamIndex: streamIndex)
       audioStreamIndex = streamIndex
-      // Re-seek so both pipelines restart at the current position.
-      let current = currentClock()
-      lastPresentedPTS = current
-      try demuxer.seek(to: current)
-      discardAudioBefore = current
-      restartAudioPlayer()
-      startMonotonic = CACurrentMediaTime() - current
-      audioClockOffset = current
       NSLog("[Native] audio track switched to stream %d", streamIndex)
-    } catch { stateChanged() }
+    } catch {
+      // Keep the file audible: fall back to the stream that was playing.
+      NSLog("[Native] audio switch to stream %d failed; restoring %d", streamIndex, previous ?? -1)
+      if let previous, (try? setupAudio(streamIndex: previous)) != nil {
+        audioStreamIndex = previous
+      } else {
+        audioStreamIndex = nil
+      }
+    }
+    publishAudioStream()
+    // Re-seek so both pipelines restart at the current position.
+    lastPresentedPTS = current
+    _ = try? demuxer.seek(to: current)
+    discardAudioBefore = current
+    startMonotonic = CACurrentMediaTime() - current
+    audioClockOffset = current
+    clockBaseAudio = audioPlayer != nil && audioDecoder != nil
+    if isPaused {
+      pausedClock = current
+      audioIsRunning = false
+    } else {
+      // Restart the node so the new stream's buffers actually play.
+      restartAudioPlayer()
+    }
+    stateChanged()
   }
 
   /// Enables/disables the subtitle stream. Clears collected cues and
@@ -1651,9 +2374,23 @@ public final class PlaybackController {
     // No-op when the subtitle state isn't actually changing (e.g. the
     // partial-download retry re-applies an already-off preference). Without
     // this the re-seek below runs once per open for a permanently-off subtitle.
+    // Only text subtitles can be rendered; anything else is treated as off.
+    var streamIndex = streamIndex
+    var codec = ""
+    if let index = streamIndex {
+      if let track = demuxer.track(at: index), track.type == MEDIA_TRACK_TYPE_SUBTITLE.rawValue,
+        Self.isSupportedSubtitleCodec(track.codecName)
+      {
+        codec = track.codecName
+      } else {
+        NSLog("[Native] subtitle stream %d is not a text subtitle track — off", index)
+        streamIndex = nil
+      }
+    }
     guard streamIndex != subtitleStreamIndex else { return }
     clearSubtitleCues()
     subtitleStreamIndex = streamIndex
+    subtitleCodec = codec
     // The seek below re-positions the demuxer BACKWARD to a keyframe, so the
     // loop re-reads VIDEO from the keyframe before the target. Reset video
     // presentation state (mirror of performSeek) so that window is dropped
@@ -1667,7 +2404,7 @@ public final class PlaybackController {
     videoQueue.removeAll()
     videoQueueGeneration = gen
     videoQueueLock.unlock()
-    pendingVideoPackets.removeAll()
+    clearPendingVideoPackets()
     do {
       let current = currentClock()
       lastPresentedPTS = current
@@ -1690,20 +2427,30 @@ public final class PlaybackController {
 
   // MARK: - EOF
 
-  private func drainAndFinish() {
-    NSLog("[Native] EOF drain (audio plays out)")
-    // Let audio play out (~plan §30: display the final frames, wait for
-    // audio, then transition to ended).
-    if clockBaseAudio, let engine = audioEngine {
-      let start = CACurrentMediaTime()
-      while CACurrentMediaTime() - start < 2.0 {
-        presentDueFrames()
-        usleep(8000)
-      }
+  /// One step of the EOF drain (~plan §30: display the final frames and let
+  /// the scheduled audio play out, then transition to ended). Returns true
+  /// while the drain window is still open.
+  private func drainStep() -> Bool {
+    guard clockBaseAudio, audioEngine != nil else { return false }
+    let now = CACurrentMediaTime()
+    if drainDeadline == nil {
+      NSLog("[Native] EOF drain (audio plays out)")
+      drainDeadline = now + 2.0
     }
+    guard let deadline = drainDeadline, now < deadline else { return false }
+    presentDueFrames()
+    usleep(8000)
+    return true
+  }
+
+  /// Ends a drained session. Runs after the loop has given up the queue
+  /// (tryExitLoop), so the demuxer stays open for a later seek/replay.
+  private func finishPlayback() {
+    drainDeadline = nil
     // Audio played out; stop its render thread (same cost as pause).
     pauseAudioEngine()
     isPlaying = false
+    isEnded = true
     stateChanged()
   }
 
@@ -1734,10 +2481,34 @@ public final class PlaybackController {
   }
 }
 
+/// Owns the retain that keeps one submitted sample buffer alive until the
+/// decoder's output callback runs. Submission `passRetained`s one of these
+/// and the output callback `release`s it, so the sample buffer (and the block
+/// buffer's bytes) cannot be deallocated mid-decode. Decode is currently
+/// synchronous, so the callback always runs before submission returns; under
+/// asynchronous decode a frame the decoder never reports on (session
+/// invalidated by a seek) would leak one holder, bounded by the in-flight limit.
+final class VTSampleBufferHolder {
+  let sampleBuffer: CMSampleBuffer
+  init(_ sampleBuffer: CMSampleBuffer) { self.sampleBuffer = sampleBuffer }
+}
+
 /// Retains the VT callback closure context.
 final class VideoCollectorBox {
   let onFrame: (NativeVideoFrame) -> Void
-  init(onFrame: @escaping (NativeVideoFrame) -> Void) { self.onFrame = onFrame }
+  /// Called for EVERY output callback (before the frame is filtered), with the
+  /// decode status, info flags and presentation time, so the engine can account
+  /// for frames the decoder dropped or failed on. Without this the client
+  /// cannot tell "the decoder is behind" from "the decoder discarded what I
+  /// gave it" — the difference between a slow stream and a starving pipeline.
+  let onOutcome: (OSStatus, VTDecodeInfoFlags, Double) -> Void
+  init(
+    onFrame: @escaping (NativeVideoFrame) -> Void,
+    onOutcome: @escaping (OSStatus, VTDecodeInfoFlags, Double) -> Void
+  ) {
+    self.onFrame = onFrame
+    self.onOutcome = onOutcome
+  }
 }
 
 // MARK: - FFmpegDemuxer handle escape (internal to the native engine)

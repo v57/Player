@@ -3,8 +3,8 @@
 // C99/C11 clean. All FFmpeg types stay private to this TU; the boundary
 // only crosses app-owned MediaTrack/MediaPacket structs and an opaque handle.
 //
-// Dev PoC links against a local FFmpeg install (/opt/homebrew); the shipped
-// build will swap to ThirdParty/FFmpeg libs per KANBAN Wave-1 B.
+// Links the vendored minimal FFmpeg build under Sources/FFmpeg (matroska
+// demuxer + dca/ac3/eac3 decoders; see Sources/FFmpeg/README.md).
 
 // Define the real struct bodies (suppresses the Clang-importer placeholder
 // in MediaDemuxer.h; must come before the include).

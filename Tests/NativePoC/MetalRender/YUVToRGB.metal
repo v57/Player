@@ -4,9 +4,10 @@
 //   Y'  = (Y - 16) / 219
 //   Cb' = (Cb - 128) / 224
 //   Cr' = (Cr - 128) / 224
-//   R = 1.1644*Y' + 1.5960*Cr'
-//   G = 1.1644*Y' - 0.3918*Cb' - 0.8130*Cr'
-//   B = 1.1644*Y' + 2.0172*Cb'
+//   R = Y' + 1.5748*Cr'
+//   G = Y' - 0.1873*Cb' - 0.4681*Cr'
+//   B = Y' + 1.8556*Cb'
+//   (Y'/Cb'/Cr' are already normalized, so no extra 255/219 gain.)
 //
 // NOTE: MetalVideoRenderer.swift embeds an identical copy of this source as a
 // Swift string (device.makeDefaultLibrary(source:)) so the test binary is
@@ -57,9 +58,9 @@ fragment float4 yuvFragment(VertexOut in [[stage_in]],
     float cb  = (uv.r * 255.0 - 128.0) / 224.0;
     float cr  = (uv.g * 255.0 - 128.0) / 224.0;
 
-    float r = 1.1644 * yp + 1.5960 * cr;
-    float g = 1.1644 * yp - 0.3918 * cb - 0.8130 * cr;
-    float b = 1.1644 * yp + 2.0172 * cb;
+    float r = yp + 1.5748 * cr;
+    float g = yp - 0.1873 * cb - 0.4681 * cr;
+    float b = yp + 1.8556 * cb;
 
     return float4(r, g, b, 1.0);
 }

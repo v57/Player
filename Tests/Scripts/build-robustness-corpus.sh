@@ -92,6 +92,21 @@ printf '\xde\xad\xbe\xef' | dd of=h264-corrupt.mkv bs=1 seek=$((CSIZE * 4 / 10))
 gen h264-long.mkv -f lavfi -i testsrc2=duration=120:size=320x180:rate=30 \
   -c:v libx264 -pix_fmt yuv420p -an
 
+# 12-14. Playable AC3 samples for Tests/SomePlayerTests/PlaybackIntegrationTests
+# (the engine decodes AC3/E-AC3/DTS only).
+# Mono AC3 FIRST (used to crash), then stereo AC3, + SRT + ASS subtitles.
+gen h264-ac3-mono-stereo-subs.mkv -f lavfi -i testsrc2=duration=8:size=640x360:rate=24 \
+  -f lavfi -i "sine=frequency=440:duration=8" -f lavfi -i "sine=frequency=660:duration=8" \
+  -i "$CORPUS/_t.srt" -i "$CORPUS/_t.ass" -map 0 -map 1 -map 2 -map 3 -map 4 \
+  -c:v libx264 -pix_fmt yuv420p -g 48 -c:a ac3 -ac:a:0 1 -ac:a:1 2 -c:s:0 srt -c:s:1 ass
+# Undecodable AAC first, decodable 5.1 AC3 second (first-track gate).
+gen h264-aac-then-ac3-51.mkv -f lavfi -i testsrc2=duration=8:size=640x360:rate=24 \
+  -f lavfi -i "sine=frequency=440:duration=8" -f lavfi -i "sine=frequency=550:duration=8" \
+  -map 0 -map 1 -map 2 -c:v libx264 -pix_fmt yuv420p -c:a:0 aac -c:a:1 ac3 -ac:a:1 6
+# Short stereo AC3 file: plays to the end quickly.
+gen h264-ac3-short.mkv -f lavfi -i testsrc2=duration=4:size=640x360:rate=24 \
+  -f lavfi -i "sine=duration=4" -c:v libx264 -pix_fmt yuv420p -c:a ac3 -ac 2
+
 rm -f "$CORPUS/_t.srt" "$CORPUS/_t.ass" "$CORPUS/_t.meta"
 
 echo

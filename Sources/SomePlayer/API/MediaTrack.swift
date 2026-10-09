@@ -27,6 +27,9 @@ public struct MediaTrack: Identifiable, Equatable, Hashable, Sendable {
   public let sampleRate: Int?
   public let isDefault: Bool
   public let isForced: Bool
+  /// False when the engine cannot play this track (an audio codec the build
+  /// has no decoder for, or a bitmap subtitle format). Menus list it disabled.
+  public let isPlayable: Bool
 }
 
 extension MediaTrack {

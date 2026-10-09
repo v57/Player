@@ -3,6 +3,10 @@
 
 import PackageDescription
 
+// Vendored FFmpeg dylibs, resolved from the package root so the package
+// builds from any checkout location (it used to hardcode /Users/v57/...).
+let ffmpegLibDir = Context.packageDirectory + "/Sources/FFmpeg/lib"
+
 let package = Package(
   name: "SomePlayer", platforms: [.macOS(.v27)],
   products: [
@@ -19,7 +23,7 @@ let package = Package(
       cSettings: [.headerSearchPath("../FFmpeg/include")],
       linkerSettings: [
         .linkedLibrary("avformat"), .linkedLibrary("avcodec"), .linkedLibrary("avutil"),
-        .unsafeFlags(["-L/Users/v57/Projects/Player/Sources/FFmpeg/lib"]),
+        .unsafeFlags(["-L" + ffmpegLibDir]),
       ], ),
     // The media engine: demux wrapper, decode, playback, persistence
     // seam, and the SomePlayerView SwiftUI surface.
@@ -33,7 +37,7 @@ let package = Package(
         // test bundle must resolve that rpath to the vendored lib dir
         // to dlopen the library at test runtime.
         .unsafeFlags([
-          "-Xlinker", "-rpath", "-Xlinker", "/Users/v57/Projects/Player/Sources/FFmpeg/lib",
+          "-Xlinker", "-rpath", "-Xlinker", ffmpegLibDir,
         ])
       ], ),
   ], cLanguageStandard: .gnu17)

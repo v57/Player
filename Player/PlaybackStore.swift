@@ -34,7 +34,6 @@ import SwiftData
     let storeURL = appSupport.appendingPathComponent("Player.store")
     migrateLegacyDefaultStoreIfNeeded(to: storeURL)
     let disk = ModelConfiguration(schema: schema, url: storeURL, cloudKitDatabase: .none)
-    if let container = try? ModelContainer(for: schema, configurations: [disk]) { return container }
     // Unwritable/corrupt store: fall back to in-memory so playback works.
     // Log the failure — a silently missing disk store loses resume data.
     do { return try ModelContainer(for: schema, configurations: [disk]) } catch {
@@ -151,8 +150,12 @@ import SwiftData
   // MARK: - Track picks
 
   /// Saves a manual pick so the same choice carries to the next video.
-  /// Picks are global (not per-file); the newest pick per kind wins.
+  /// Picks are global (not per-file); only the newest pick per kind is ever
+  /// read, so older ones are deleted (they used to accumulate one row per
+  /// menu click forever).
   func storeTrackPick(kind: String, lang: String?, title: String?, trackID: Int, isOff: Bool) {
+    let stale = FetchDescriptor<TrackPick>(predicate: #Predicate { $0.kind == kind })
+    for old in (try? modelContext.fetch(stale)) ?? [] { modelContext.delete(old) }
     let pick = TrackPick(kind: kind, lang: lang, title: title, trackID: trackID, isOff: isOff)
     modelContext.insert(pick)
     try? modelContext.save()

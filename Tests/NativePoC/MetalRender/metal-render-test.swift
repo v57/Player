@@ -33,9 +33,9 @@ import Metal
     let yp = (Float(y) - 16.0) / 219.0
     let cbp = (Float(cb) - 128.0) / 224.0
     let crp = (Float(cr) - 128.0) / 224.0
-    let r = min(max(1.1644 * yp + 1.5960 * crp, 0), 1)
-    let g = min(max(1.1644 * yp - 0.3918 * cbp - 0.8130 * crp, 0), 1)
-    let b = min(max(1.1644 * yp + 2.0172 * cbp, 0), 1)
+    let r = min(max(yp + 1.5748 * crp, 0), 1)
+    let g = min(max(yp - 0.1873 * cbp - 0.4681 * crp, 0), 1)
+    let b = min(max(yp + 1.8556 * cbp, 0), 1)
     return (r, g, b)
   }
 
@@ -155,7 +155,7 @@ import Metal
         && abs(Int(grayGot.g) - Int(grayExpected.g)) <= tolerance
         && abs(Int(grayGot.b) - Int(grayExpected.b)) <= tolerance, "mid-gray YUV->RGB conversion")
     print(
-      "note: Y=126 is 50% luma (Y' = 110/219 = 0.5023); the given matrix outputs 1.1644*0.5023 = 0.585 (149/255) — not 0.5"
+      "note: Y=126 is 50% luma (Y' = 110/219 = 0.5023 -> 128/255)"
     )
 
     let (err, erg, erb) = expectedRGB(y: 81, cb: 90, cr: 240)

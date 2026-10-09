@@ -64,7 +64,7 @@ struct ContentView: View {
     }.fileImporter(
       isPresented: Binding(
         get: { uiState.showFileImporter }, set: { uiState.showFileImporter = $0 }),
-      allowedContentTypes: [.movie, .mkv], allowsMultipleSelection: false
+      allowedContentTypes: [.mkv], allowsMultipleSelection: false
     ) { result in
       if case .success(let urls) = result, let url = urls.first {
         Task { try? await player.open(url) }
@@ -156,28 +156,12 @@ struct ContentView: View {
   /// folder dropped on the player shouldn't silently vanish; surface it
   /// through the existing error alert instead.
   private func openDropped(_ url: URL) {
-    guard Self.isVideoURL(url) else {
-      player.errorMessage = "\"\(url.lastPathComponent)\" is not a video file."
+    guard NativeSomePlayer.isSupportedFile(url) else {
+      player.errorMessage = "\"\(url.lastPathComponent)\" is not a supported video file (MKV only)."
       return
     }
     Task { try? await player.open(url) }
   }
-
-  /// True for anything macOS classifies as a movie plus the extensions it
-  /// leaves as non-conforming dynamic UTIs that the FFmpeg engine still
-  /// plays.
-  private static func isVideoURL(_ url: URL) -> Bool {
-    let ext = url.pathExtension.lowercased()
-    if let type = UTType(filenameExtension: ext), type.conforms(to: .movie) { return true }
-    return Self.extraVideoExtensions.contains(ext)
-  }
-
-  /// Extensions whose UTI resolves to a dynamic (non-public.movie) type on
-  /// macOS 27 (probed): mkv, vob, divx, asf. rmvb/m2v are included for the
-  /// same reason — the engine is FFmpeg and plays them regardless.
-  private static let extraVideoExtensions: Set<String> = [
-    "mkv", "vob", "divx", "asf", "rmvb", "m2v",
-  ]
 
   /// Red "Waiting" capsule shown in the top-leading corner while the engine
   /// waits for a still-downloading file to update.
@@ -201,4 +185,8 @@ struct ContentView: View {
   }
 }
 
-extension UTType { static var mkv: UTType { UTType(filenameExtension: "mkv") ?? .movie } }
+extension UTType {
+  /// Matroska. Never falls back to `.movie`: that would let the importer pick
+  /// MP4/MOV files the engine (Matroska-only demuxer) cannot open.
+  static var mkv: UTType { UTType(filenameExtension: "mkv", conformingTo: .movie) ?? .movie }
+}

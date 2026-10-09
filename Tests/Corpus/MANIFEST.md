@@ -6,7 +6,10 @@ minimal build.
 
 ## Files
 
+- h264-aac-then-ac3-51.mkv  8.023000s  [h264,video aac,audio,1 ac3,audio,6]  chapters=0
 - h264-aac.mkv  10.005000s  [h264,video aac,audio,2]  chapters=0
+- h264-ac3-mono-stereo-subs.mkv  8.006000s  [h264,video ac3,audio,1 ac3,audio,2 subrip,subtitle ass,subtitle]  chapters=0
+- h264-ac3-short.mkv  4.006000s  [h264,video ac3,audio,2]  chapters=0
 - h264-ass.mkv  10.000000s  [h264,video ass,subtitle]  chapters=0
 - h264-attachments.mkv  10.000000s  [h264,video ttf,attachment]  chapters=0
 - h264-chapters.mkv  30.000000s  [h264,video]  chapters=3

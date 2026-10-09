@@ -40,7 +40,8 @@ struct PlayerCommands: Commands {
             track.displayName,
             isOn: Binding(
               get: { player.audioTrackID == track.id },
-              set: { on in if on { player.selectAudioTrack(track.id) } }))
+              set: { on in if on { player.selectAudioTrack(track.id) } })
+          ).disabled(!track.isPlayable)
         }
       }
       Divider()
@@ -66,7 +67,8 @@ struct PlayerCommands: Commands {
             track.displayName,
             isOn: Binding(
               get: { player.subtitleTrackID == track.id },
-              set: { on in if on { player.selectSubtitleTrack(track.id) } }))
+              set: { on in if on { player.selectSubtitleTrack(track.id) } })
+          ).disabled(!track.isPlayable)
         }
       } else {
         Text("No subtitle tracks").disabled(true)

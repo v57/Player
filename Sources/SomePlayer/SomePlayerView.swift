@@ -42,10 +42,10 @@ public final class MediaMetalView: NSView, VideoFrameSink {
   private let subtitleLayer = CATextLayer()
   /// The boxed player (set by the SwiftUI wrapper) for key/click transport.
   weak var player: SomePlayerBox?
-  // TEMP DIAGNOSTICS
-  private var diagFirstPresent = false
-  private var diagRendererNil = 0
-  private var diagBackingZero = 0
+  /// One-shot warnings: a frame arrived but nothing could render it.
+  private var warnedRendererNil = false
+  /// The window whose key notifications we observe (exactly one at a time).
+  private weak var observedWindow: NSWindow?
 
   public override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
@@ -57,9 +57,7 @@ public final class MediaMetalView: NSView, VideoFrameSink {
     if let device = metalLayer.device {
       renderer = try? MediaMetalRenderer(device: device, pixelFormat: metalLayer.pixelFormat)
     }
-    NSLog(
-      "[Native] VIEW init device=%@ renderer=%@", metalLayer.device != nil ? "ok" : "nil",
-      renderer != nil ? "ok" : "nil")
+    if renderer == nil { NSLog("[Native] VIEW init: Metal renderer unavailable") }
     setupSubtitleLayer()
   }
 
@@ -70,7 +68,14 @@ public final class MediaMetalView: NSView, VideoFrameSink {
 
   public override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
-    guard window != nil else { return }
+    // Observe only the current window: the observer used to be added on
+    // every move and removed only for the last window.
+    if let observedWindow {
+      NotificationCenter.default.removeObserver(
+        self, name: NSWindow.didBecomeKeyNotification, object: observedWindow)
+    }
+    observedWindow = window
+    guard let window else { return }
     // Take first responder when attached to a window, so transport keys
     // (Space/arrows/Return) work without clicking the video first. Also
     // re-grab when the window comes back key (e.g. after a sheet or
@@ -103,16 +108,6 @@ public final class MediaMetalView: NSView, VideoFrameSink {
 
   /// VideoFrameSink — MainActor, called by the controller.
   public func present(frame: NativeVideoFrame) {
-    if !diagFirstPresent {
-      diagFirstPresent = true
-      let backing = convertToBacking(bounds)
-      let fw = CVPixelBufferGetWidth(frame.pixelBuffer)
-      let fh = CVPixelBufferGetHeight(frame.pixelBuffer)
-      NSLog(
-        "[Native] VIEW first present pts=%.3f frame=%ldx%ld renderer=%@ layerIsViewLayer=%d win=%@ bounds=%.0fx%.0f backing=%.0fx%.0f",
-        frame.pts, fw, fh, renderer != nil ? "ok" : "nil", layer === metalLayer ? 1 : 0,
-        window != nil ? "yes" : "no", bounds.width, bounds.height, backing.width, backing.height)
-    }
     currentFrame = frame
     renderFrame()
     updateSubtitleOverlay()
@@ -167,20 +162,14 @@ public final class MediaMetalView: NSView, VideoFrameSink {
   private func renderFrame() {
     guard let frame = currentFrame else { return }
     guard let renderer else {
-      diagRendererNil += 1
-      if diagRendererNil == 1 {
-        NSLog("[Native] VIEW renderFrame: renderer NIL (frame present, nothing renders)")
+      if !warnedRendererNil {
+        warnedRendererNil = true
+        NSLog("[Native] VIEW renderFrame: no Metal renderer — frames cannot be shown")
       }
       return
     }
     let backing = convertToBacking(bounds)
-    guard backing.width >= 1, backing.height >= 1 else {
-      diagBackingZero += 1
-      if diagBackingZero == 1 {
-        NSLog("[Native] VIEW renderFrame: backing ZERO (%.1fx%.1f)", backing.width, backing.height)
-      }
-      return
-    }
+    guard backing.width >= 1, backing.height >= 1 else { return }
     // Aspect-fit with the source's display aspect (DAR = SAR * w/h).
     let srcW = CGFloat(CVPixelBufferGetWidth(frame.pixelBuffer))
     let srcH = CGFloat(CVPixelBufferGetHeight(frame.pixelBuffer))
@@ -193,7 +182,8 @@ public final class MediaMetalView: NSView, VideoFrameSink {
   func tearDown() {
     currentFrame = nil
     NotificationCenter.default.removeObserver(
-      self, name: NSWindow.didBecomeKeyNotification, object: window)
+      self, name: NSWindow.didBecomeKeyNotification, object: observedWindow)
+    observedWindow = nil
     // (do NOT touch metalLayer.contents — see clear(); undefined on CAMetalLayer)
   }
 
@@ -201,15 +191,31 @@ public final class MediaMetalView: NSView, VideoFrameSink {
 
   public override func mouseDown(with event: NSEvent) {
     if event.clickCount == 2 {
+      // A double-click arrives as TWO mouseDowns: clickCount=1, then
+      // clickCount=2. The first one already armed the single-click timer
+      // below, so cancel it — otherwise the deferred play/pause fires
+      // right after entering fullscreen.
+      singleClickTimer?.invalidate()
+      singleClickTimer = nil
       window?.toggleFullScreen(nil)
-    } else {
+    } else if event.clickCount == 1 {
       // Single click toggles play/pause (deferred for double-click).
       singleClickTimer?.invalidate()
-      singleClickTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: false) {
+      singleClickTimer = Timer.scheduledTimer(
+        withTimeInterval: NSEvent.doubleClickInterval, repeats: false
+      ) {
         [weak self] _ in
-        guard let self else { return }
-        self.togglePlayPause()
+        // Scheduled on the main run loop, so the callback runs on main.
+        MainActor.assumeIsolated {
+          guard let self else { return }
+          self.singleClickTimer = nil
+          self.togglePlayPause()
+        }
       }
+    } else {
+      // Triple-click and beyond: swallow any stray pending single-click.
+      singleClickTimer?.invalidate()
+      singleClickTimer = nil
     }
   }
 
@@ -287,8 +293,7 @@ final class MediaMetalRenderer {
   private let pixelFormat: MTLPixelFormat
   private let pipeline: MTLRenderPipelineState
   private var textureCache: CVMetalTextureCache?
-  // TEMP DIAGNOSTIC
-  private var diagNilDrawables = 0
+  private var nilDrawables = 0
 
   init(device: MTLDevice, pixelFormat: MTLPixelFormat) throws {
     self.device = device
@@ -315,13 +320,13 @@ final class MediaMetalRenderer {
     pixelBuffer: CVPixelBuffer, into layer: CAMetalLayer, size: CGSize, displayAspect: CGFloat
   ) {
     guard let drawable = layer.nextDrawable() else {
-      if diagNilDrawables == 0 {
+      if nilDrawables == 0 {
         NSLog("[Native] VIEW renderer: nextDrawable NIL (layer not connected?)")
       }
-      diagNilDrawables += 1
+      nilDrawables += 1
       return
     }
-    diagNilDrawables = 0
+    nilDrawables = 0
     guard let cache = textureCache else { return }
 
     // Two-plane textures (Y + CbCr) from the pixel buffer.
@@ -356,12 +361,50 @@ final class MediaMetalRenderer {
     else { return }
     enc.setRenderPipelineState(pipeline)
     enc.setVertexBytes(&rect, length: MemoryLayout<SIMD4<Float>>.size, index: 0)
+    var matrix = Self.ycbcrMatrix(for: pixelBuffer)
+    enc.setFragmentBytes(&matrix, length: MemoryLayout<YCbCrMatrix>.stride, index: 0)
     enc.setFragmentTexture(yTex, index: 0)
     enc.setFragmentTexture(uvTex, index: 1)
     enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
     enc.endEncoding()
     cmd.present(drawable)
     cmd.commit()
+  }
+
+  /// Limited-range Y'CbCr -> R'G'B' coefficients, applied to normalized
+  /// inputs Y' = (Y-16)/219 and Cb'/Cr' = (C-128)/224:
+  ///   R = Y' + rCr*Cr';  G = Y' - gCb*Cb' - gCr*Cr';  B = Y' + bCb*Cb'
+  /// (Kr/Kb from the standard: rCr = 2(1-Kr), bCb = 2(1-Kb), gCb = bCb*Kb/Kg,
+  /// gCr = rCr*Kr/Kg). The old shader multiplied the already-normalized values
+  /// by the 8-bit-domain constants (1.1644, 1.596, ...), scaling twice:
+  /// luma ~16% hot with highlights clipping from Y≈204 and chroma ~14%
+  /// oversaturated. It also used BT.601 for BT.709 (HD/4K) content.
+  struct YCbCrMatrix {
+    var rCr: Float
+    var gCb: Float
+    var gCr: Float
+    var bCb: Float
+
+    static let bt601 = YCbCrMatrix(rCr: 1.402, gCb: 0.344136, gCr: 0.714136, bCb: 1.772)
+    static let bt709 = YCbCrMatrix(rCr: 1.5748, gCb: 0.187324, gCr: 0.468124, bCb: 1.8556)
+    static let bt2020 = YCbCrMatrix(rCr: 1.4746, gCb: 0.164553, gCr: 0.571353, bCb: 1.8814)
+  }
+
+  /// The matrix the stream was encoded with (VideoToolbox carries the VUI
+  /// colour description as a pixel-buffer attachment); without one, the usual
+  /// convention: BT.601 for SD, BT.709 for HD and up.
+  static func ycbcrMatrix(for pixelBuffer: CVPixelBuffer) -> YCbCrMatrix {
+    if let value = CVBufferCopyAttachment(pixelBuffer, kCVImageBufferYCbCrMatrixKey, nil) {
+      let matrix = value as? String
+      if matrix == (kCVImageBufferYCbCrMatrix_ITU_R_601_4 as String)
+        || matrix == (kCVImageBufferYCbCrMatrix_SMPTE_240M_1995 as String)
+      {
+        return .bt601
+      }
+      if matrix == (kCVImageBufferYCbCrMatrix_ITU_R_2020 as String) { return .bt2020 }
+      if matrix == (kCVImageBufferYCbCrMatrix_ITU_R_709_2 as String) { return .bt709 }
+    }
+    return CVPixelBufferGetHeight(pixelBuffer) < 720 ? .bt601 : .bt709
   }
 
   static let shaderSource = """
@@ -381,19 +424,22 @@ final class MediaMetalRenderer {
         out.texCoord = float2(corner.x, 1.0 - corner.y);
         return out;
     }
+    struct YCbCrMatrix { float rCr; float gCb; float gCr; float bCb; };
     fragment float4 yuvFragment(VertexOut in [[stage_in]],
                                 texture2d<float, access::sample> yTex [[texture(0)]],
-                                texture2d<float, access::sample> uvTex [[texture(1)]]) {
+                                texture2d<float, access::sample> uvTex [[texture(1)]],
+                                constant YCbCrMatrix &m [[buffer(0)]]) {
         constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
         float y8 = yTex.sample(s, in.texCoord).r;
         float2 uv = uvTex.sample(s, in.texCoord).rg;
+        // Limited range -> normalized (16..235 -> 0..1, 16..240 -> -0.5..0.5).
         float yp = (y8 * 255.0 - 16.0) / 219.0;
         float cb = (uv.r * 255.0 - 128.0) / 224.0;
         float cr = (uv.g * 255.0 - 128.0) / 224.0;
-        float r = 1.1644 * yp + 1.5960 * cr;
-        float g = 1.1644 * yp - 0.3918 * cb - 0.8130 * cr;
-        float b = 1.1644 * yp + 2.0172 * cb;
-        return float4(r, g, b, 1.0);
+        float r = yp + m.rCr * cr;
+        float g = yp - m.gCb * cb - m.gCr * cr;
+        float b = yp + m.bCb * cb;
+        return float4(saturate(float3(r, g, b)), 1.0);
     }
     """
 }

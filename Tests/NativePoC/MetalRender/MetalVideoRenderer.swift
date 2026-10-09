@@ -88,9 +88,9 @@ public final class MetalVideoRenderer {
         float cb  = (uv.r * 255.0 - 128.0) / 224.0;
         float cr  = (uv.g * 255.0 - 128.0) / 224.0;
 
-        float r = 1.1644 * yp + 1.5960 * cr;
-        float g = 1.1644 * yp - 0.3918 * cb - 0.8130 * cr;
-        float b = 1.1644 * yp + 2.0172 * cb;
+        float r = yp + 1.5748 * cr;
+        float g = yp - 0.1873 * cb - 0.4681 * cr;
+        float b = yp + 1.8556 * cb;
 
         return float4(r, g, b, 1.0);
     }
