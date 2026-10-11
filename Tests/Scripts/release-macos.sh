@@ -8,8 +8,8 @@
 # Upload Player.zip to a GitHub release tagged v<version>. The asset name
 # never changes, so this link always serves the newest release:
 #   https://github.com/v57/Player/releases/latest/download/Player.zip
-# The in-app update check (Player/UpdateChecker.swift) reads the latest
-# release's tag, so the tag must be "v" + CFBundleShortVersionString.
+# The in-app updater (AppUpdater, GitHubReleases) reads the latest release's
+# tag, so the tag must be "v" + CFBundleShortVersionString.
 #
 # Usage: Tests/Scripts/release-macos.sh [--skip-notarize]
 #   Notarization needs a notarytool keychain profile, created once with
@@ -31,14 +31,22 @@ OUT="${REPO_ROOT}/build/release"
 rm -rf "${OUT}"
 mkdir -p "${OUT}"
 
-# Player.xcodeproj finds the package at ../Player, so the checkout folder must
-# be named Player. Build from a copy when it isn't (e.g. a git worktree).
+# Player.xcodeproj finds its packages at ../Player and ../AppUpdater, so the
+# checkout folder must be named Player with AppUpdater beside it. Build from a
+# copy when it isn't (e.g. a git worktree), with AppUpdater linked next to it
+# (found beside this checkout or beside the main checkout).
 SRC="${REPO_ROOT}"
-if [[ "$(basename "${REPO_ROOT}")" != "Player" ]]; then
+if [[ "$(basename "${REPO_ROOT}")" != "Player" || ! -d "${REPO_ROOT}/../AppUpdater" ]]; then
   SRC="${OUT}/src/Player"
   mkdir -p "${SRC}"
   rsync -a --exclude .build --exclude build --exclude .git --exclude Tests/Corpus \
     "${REPO_ROOT}/" "${SRC}/"
+  MAIN_CHECKOUT="$(dirname "$(git -C "${REPO_ROOT}" rev-parse --path-format=absolute --git-common-dir)")"
+  for dir in "${REPO_ROOT}/../AppUpdater" "${MAIN_CHECKOUT}/../AppUpdater"; do
+    if [[ -d "${dir}" ]]; then ln -sfn "$(cd "${dir}" && pwd)" "${OUT}/src/AppUpdater"; break; fi
+  done
+  [[ -e "${OUT}/src/AppUpdater" ]] \
+    || { echo "ERROR: AppUpdater not found beside the checkout (git clone it next to Player)" >&2; exit 1; }
 fi
 
 VERSION="$(xcodebuild -project "${SRC}/Player.xcodeproj" -scheme Player -configuration Release \

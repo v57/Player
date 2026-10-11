@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		267577EF3037555800FB9989 /* SomePlayer in Frameworks */ = {isa = PBXBuildFile; productRef = 267577EE3037555800FB9989 /* SomePlayer */; };
+		A9D0C0DE0000000000000003 /* AppUpdater in Frameworks */ = {isa = PBXBuildFile; productRef = A9D0C0DE0000000000000002 /* AppUpdater */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,6 +41,7 @@
 			isa = PBXFrameworksBuildPhase;
 			files = (
 				267577EF3037555800FB9989 /* SomePlayer in Frameworks */,
+				A9D0C0DE0000000000000003 /* AppUpdater in Frameworks */,
 			);
 		};
 /* End PBXFrameworksBuildPhase section */
@@ -81,6 +83,7 @@
 			name = Player;
 			packageProductDependencies = (
 				267577EE3037555800FB9989 /* SomePlayer */,
+				A9D0C0DE0000000000000002 /* AppUpdater */,
 			);
 			productName = MyApp;
 			productReference = 000000000000000000000120 /* Player.app */;
@@ -112,6 +115,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				267577ED3037555800FB9989 /* XCLocalSwiftPackageReference "../Player" */,
+				A9D0C0DE0000000000000001 /* XCLocalSwiftPackageReference "../AppUpdater" */,
 			);
 			preferredProjectObjectVersion = 90;
 			productRefGroup = 000000000000000000000020 /* Products */;
@@ -431,12 +435,20 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Player;
 		};
+		A9D0C0DE0000000000000001 /* XCLocalSwiftPackageReference "../AppUpdater" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../AppUpdater;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		267577EE3037555800FB9989 /* SomePlayer */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = SomePlayer;
+		};
+		A9D0C0DE0000000000000002 /* AppUpdater */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AppUpdater;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

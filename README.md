@@ -28,7 +28,8 @@ video, AVAudioEngine plays audio.
 
 [Player.zip](https://github.com/v57/Player/releases/latest/download/Player.zip) from the latest
 [GitHub release](https://github.com/v57/Player/releases), signed with Developer ID and notarized. Player
-checks GitHub for a new release once a day (turn it off under Player > Check for Updates Automatically).
+checks GitHub for a new release once a day and installs it in place when you agree (turn the check off under
+Player > Check for Updates Automatically). Updates come from [AppUpdater](https://github.com/v57/AppUpdater).
 
 ## Requirements
 
@@ -42,7 +43,8 @@ swift test
 xcodebuild -project Player.xcodeproj -scheme Player -destination 'platform=macOS' build
 ```
 
-The checkout folder must be named `Player`: the Xcode project finds the package at `../Player`.
+The checkout folder must be named `Player`, with [AppUpdater](https://github.com/v57/AppUpdater) cloned
+beside it: the Xcode project finds its packages at `../Player` and `../AppUpdater`.
 `Tests/Scripts/release-macos.sh` builds the signed and notarized `Player.zip` for a release.
 
 ## License

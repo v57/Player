@@ -1,8 +1,7 @@
 import AppKit
 
-/// Runs the daily update check at launch (UpdateChecker) and closes the app
-/// when its last window is closed (standard macOS behavior).
-/// Without the close handler, a SwiftUI WindowGroup app stays running (and in the Dock)
+/// Closes the app when its last window is closed (standard macOS behavior).
+/// Without this, a SwiftUI WindowGroup app stays running (and in the Dock)
 /// after every window is closed. Returns true from
 /// applicationShouldTerminateAfterLastWindowClosed so the app quits. AppKit
 /// calls this on the main thread; the target compiles with
@@ -10,10 +9,6 @@ import AppKit
 /// by default, which matches where these calls arrive.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-  func applicationDidFinishLaunching(_ notification: Notification) {
-    UpdateChecker.shared.checkOnLaunchIfDue()
-  }
-
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
     true
   }

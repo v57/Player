@@ -6,18 +6,10 @@ import SwiftUI
 struct PlayerCommands: Commands {
   @ObservedObject var player: SomePlayerBox
   @ObservedObject var uiState: PlayerUIState
-  /// Same key as UpdateChecker.checksAutomatically.
-  @AppStorage("updateCheckAutomatically") private var checksForUpdates = true
 
   var body: some Commands {
-    // About panel with the MIT and FFmpeg LGPL credits, and the update check.
-    CommandGroup(replacing: .appInfo) {
-      Button("About Player") { AboutPanel.show() }
-      Button("Check for Updates…") {
-        Task { await UpdateChecker.shared.check(userInitiated: true) }
-      }
-      Toggle("Check for Updates Automatically", isOn: $checksForUpdates)
-    }
+    // About panel with the MIT and FFmpeg LGPL credits.
+    CommandGroup(replacing: .appInfo) { Button("About Player") { AboutPanel.show() } }
     CommandGroup(before: .newItem) {
       Button("Open…") { uiState.showFileImporter = true }.keyboardShortcut("o", modifiers: .command)
     }

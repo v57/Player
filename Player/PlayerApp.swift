@@ -1,3 +1,4 @@
+import AppUpdater
 import SomePlayer
 import SwiftUI
 
@@ -19,6 +20,11 @@ import SwiftUI
   /// is Apple's framework (see Player/NowPlayingController.swift).
   /// App-lifetime: created once here.
   private let nowPlaying: NowPlayingController
+
+  /// Updates from GitHub Releases (Player.zip, built by
+  /// Tests/Scripts/release-macos.sh): checked daily, installed in place with
+  /// a relaunch. App-lifetime.
+  private let updater = AppUpdater(github: "v57/Player", assetName: "Player.zip")
 
   init() {
     let box = SomePlayerBox(engine: NativeSomePlayer())
@@ -44,6 +50,7 @@ import SwiftUI
     _uiState = StateObject(wrappedValue: PlayerUIState(player: box))
     // Wire the media keys / Now Playing integration. Weak-holds the box.
     nowPlaying = NowPlayingController(player: box)
+    updater.start()
   }
 
   var body: some Scene {
@@ -75,6 +82,7 @@ import SwiftUI
     // initial window for the event instead of dropping it.
     .handlesExternalEvents(matching: ["*"]).commands {
       PlayerCommands(player: player, uiState: uiState)
+      UpdaterCommands(updater: updater)
       // WindowGroup also contributes File > New Window (Cmd+N), which
       // would create the same unusable second window.
       CommandGroup(replacing: .newItem) {}
