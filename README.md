@@ -21,6 +21,12 @@ video, AVAudioEngine plays audio.
 | Audio | AAC (LC, HE-AAC), DTS, AC-3, E-AC-3 |
 | Subtitles | SRT, ASS/SSA, WebVTT (image subtitles such as PGS are not shown) |
 
+## Download
+
+[Player.zip](https://github.com/v57/Player/releases/latest/download/Player.zip) from the latest
+[GitHub release](https://github.com/v57/Player/releases), signed with Developer ID and notarized. Player
+checks GitHub for a new release once a day (turn it off under Player > Check for Updates Automatically).
+
 ## Requirements
 
 macOS 14 or later on Apple silicon. The `SomePlayer` package supports macOS 12 or later.
@@ -34,6 +40,7 @@ xcodebuild -project Player.xcodeproj -scheme Player -destination 'platform=macOS
 ```
 
 The checkout folder must be named `Player`: the Xcode project finds the package at `../Player`.
+`Tests/Scripts/release-macos.sh` builds the signed and notarized `Player.zip` for a release.
 
 ## License
 
