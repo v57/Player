@@ -6,8 +6,8 @@ import XCTest
 /// the pinned release, LGPL v2.1+ only, and no GPL or nonfree components.
 final class FFmpegLibraryTests: XCTestCase {
   func testVersionMatchesThePinnedRelease() throws {
-    let pin = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-      .appendingPathComponent("../../Sources/FFmpeg/source-version.txt")
+    let pin = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent(
+      "../../Sources/FFmpeg/source-version.txt")
     let text = try String(contentsOf: pin, encoding: .utf8)
     let line = try XCTUnwrap(text.split(separator: "\n").first { $0.hasPrefix("FFmpeg pinned") })
     let pinned = line.split(separator: ":").last!.trimmingCharacters(in: .whitespaces)

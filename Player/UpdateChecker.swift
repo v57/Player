@@ -34,8 +34,7 @@ import Foundation
   }
 
   func checkOnLaunchIfDue() {
-    guard checksAutomatically,
-      ProcessInfo.processInfo.environment["PLAYER_NO_UPDATE_CHECK"] != "1"
+    guard checksAutomatically, ProcessInfo.processInfo.environment["PLAYER_NO_UPDATE_CHECK"] != "1"
     else { return }
     let last = UserDefaults.standard.object(forKey: Key.lastCheck) as? Date ?? .distantPast
     guard Date().timeIntervalSince(last) >= Self.checkInterval else { return }
@@ -52,8 +51,7 @@ import Foundation
     do {
       let release = try await fetchLatestRelease()
       UserDefaults.standard.set(Date(), forKey: Key.lastCheck)
-      guard let release, let current,
-        case let latest = Self.version(fromTag: release.tagName),
+      guard let release, let current, case let latest = Self.version(fromTag: release.tagName),
         Self.isVersion(latest, newerThan: current)
       else {
         if userInitiated { showUpToDate(current ?? "") }
