@@ -1,7 +1,7 @@
-prefix=/Users/v57/Projects/Player/ThirdParty/FFmpeg
+prefix=${pcfiledir}/../..
 exec_prefix=${prefix}
-libdir=/Users/v57/Projects/Player/ThirdParty/FFmpeg/lib
-includedir=/Users/v57/Projects/Player/ThirdParty/FFmpeg/include
+libdir=${pcfiledir}/../../lib
+includedir=${pcfiledir}/../../include
 
 Name: libavutil
 Description: FFmpeg utility library

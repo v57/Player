@@ -17,12 +17,13 @@ let package = Package(
     // C bridge over FFmpeg (libavformat/libavcodec/libavutil). SwiftPM
     // requires C and Swift to live in separate targets; this one owns the
     // MediaDemuxer shim and links the vendored FFmpeg dylibs (headers +
-    // libs under Sources/FFmpeg, package-relative).
+    // libs under Sources/FFmpeg, package-relative) and AudioToolbox (AAC).
     .target(
       name: "SomePlayerCDemux", publicHeadersPath: ".",
       cSettings: [.headerSearchPath("../FFmpeg/include")],
       linkerSettings: [
         .linkedLibrary("avformat"), .linkedLibrary("avcodec"), .linkedLibrary("avutil"),
+        .linkedFramework("AudioToolbox"),
         .unsafeFlags(["-L" + ffmpegLibDir]),
       ], ),
     // The media engine: demux wrapper, decode, playback, persistence

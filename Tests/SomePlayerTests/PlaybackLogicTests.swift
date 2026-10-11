@@ -88,10 +88,10 @@ final class AudioRouteTests: XCTestCase {
   }
 
   func testCodecSupport() {
-    for codec in ["dts", "ac3", "eac3", "AC3"] {
+    for codec in ["dts", "ac3", "eac3", "AC3", "aac"] {
       XCTAssertTrue(PlaybackController.isSupportedAudioCodec(codec), codec)
     }
-    for codec in ["truehd", "aac", "flac", "opus"] {
+    for codec in ["truehd", "flac", "opus"] {
       XCTAssertFalse(PlaybackController.isSupportedAudioCodec(codec), codec)
     }
   }

@@ -685,10 +685,10 @@ public final class PlaybackController: @unchecked Sendable {
 
   // MARK: - Codec support
 
-  /// Audio codecs the vendored FFmpeg build can decode (DTS/dca, Dolby Digital
-  /// and Dolby Digital Plus). All three decode to planar float, which is what
-  /// the C bridge's interleaving assumes.
-  static let supportedAudioCodecs: Set<String> = ["dts", "dca", "ac3", "eac3"]
+  /// Audio codecs the C bridge can decode: DTS/dca, Dolby Digital and Dolby
+  /// Digital Plus through the vendored FFmpeg (planar float, which the bridge's
+  /// interleaving assumes), and AAC (LC, HE-AAC v1/v2) through AudioToolbox.
+  static let supportedAudioCodecs: Set<String> = ["dts", "dca", "ac3", "eac3", "aac"]
   static func isSupportedAudioCodec(_ name: String) -> Bool {
     supportedAudioCodecs.contains(name.lowercased())
   }
@@ -1087,9 +1087,26 @@ public final class PlaybackController: @unchecked Sendable {
     guard let dec = media_audio_decoder_create(demuxer.unsafeHandle, Int32(streamIndex)) else {
       throw NativePlayerError.audioDecoderFailed
     }
+    // The decoder's output format, not the track header: an HE-AAC header
+    // describes the core layer (e.g. 24 kHz mono for 48 kHz stereo output).
+    var sourceChannels: Int32 = 0
+    var sourceRate: Int32 = 0
+    var layoutMask: UInt64 = 0
+    var layoutBuf = [CChar](repeating: 0, count: 64)
+    guard
+      media_audio_decoder_get_format(
+        dec, &sourceChannels, &sourceRate, &layoutMask, &layoutBuf, layoutBuf.count)
+        == MEDIA_RESULT_OK, sourceChannels > 0, sourceRate > 0
+    else {
+      media_audio_decoder_free(dec)
+      throw NativePlayerError.audioDecoderFailed
+    }
+    let channelCount = Int(sourceChannels)
+    let layoutName = String(
+      decoding: layoutBuf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     if let old = audioDecoder { media_audio_decoder_free(old) }
     audioDecoder = dec
-    audioSourceChannels = track.channelCount
+    audioSourceChannels = channelCount
     audioFormatMismatchLogged = false
     // The previous graph (track switch) must stop rendering before it is
     // replaced; dropping a running engine left its render thread alive.
@@ -1105,14 +1122,14 @@ public final class PlaybackController: @unchecked Sendable {
     // (passthrough) or is downmixed app-side to stereo.
     let deviceChannels = Int(engine.outputNode.outputFormat(forBus: 0).channelCount)
     let route = Self.audioRoute(
-      sourceChannels: track.channelCount, layoutMask: track.layoutMask,
-      layoutName: track.layoutName, deviceChannels: deviceChannels)
-    let sampleRate = Double(track.sampleRate)
+      sourceChannels: channelCount, layoutMask: layoutMask, layoutName: layoutName,
+      deviceChannels: deviceChannels)
+    let sampleRate = Double(sourceRate)
     let playerFormat: AVAudioFormat
     var matrices: [AudioEnhancementMode: [[Float]]] = [:]
     var roles: [ChannelRole]?
     switch route {
-    case .passthrough where track.channelCount == 6:
+    case .passthrough where channelCount == 6:
       guard let layout = AVAudioChannelLayout(layoutTag: kAudioChannelLayoutTag_MPEG_5_1_A) else {
         throw NativePlayerError.outputDeviceFailed
       }
@@ -1133,7 +1150,7 @@ public final class PlaybackController: @unchecked Sendable {
           roles: downmixRoles, centerGainDB: AudioEnhancementPreset.preset(for: mode).centerGainDB)
       }
       NSLog(
-        "[Audio] downmix %d ch -> stereo (device %d ch) roles=%@", track.channelCount,
+        "[Audio] downmix %d ch -> stereo (device %d ch) roles=%@", channelCount,
         deviceChannels, String(describing: downmixRoles))
     }
     enhancementLock.lock()
@@ -1915,6 +1932,8 @@ public final class PlaybackController: @unchecked Sendable {
     cpkt.dts = pkt.dts
     cpkt.duration = pkt.duration
     cpkt.keyframe = pkt.keyframe ? 1 : 0
+    cpkt.skip_start = pkt.skipStart
+    cpkt.skip_end = pkt.skipEnd
     // The bridge only reads the bytes during the call (libavcodec copies a
     // non-refcounted packet), so lend it the Data's storage — no malloc copy.
     let sent = pkt.data.withUnsafeBytes { raw -> Bool in

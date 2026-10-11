@@ -1,7 +1,7 @@
-# FFmpeg (minimal, LGPL) — ThirdParty/FFmpeg
+# FFmpeg (minimal, LGPL) — Sources/FFmpeg
 
-Minimal shared FFmpeg build for the Player macOS app (arm64): Matroska
-demuxing + DTS (dca), Dolby Digital (ac3) and E-AC3 (eac3) decoding.
+Minimal shared FFmpeg build for the Player macOS app (arm64): Matroska and
+MP4/MOV demuxing + DTS (dca), Dolby Digital (ac3) and E-AC3 (eac3) decoding.
 Pinned to FFmpeg n7.1.5
 (3a0867c2bfda4a4d4309ca1a8cbdc6175e67f587). Reproduced by `Tests/Scripts/build-ffmpeg-macos.sh` — no
 Homebrew dependency (the script clones the pinned tag itself).
@@ -19,11 +19,13 @@ Homebrew dependency (the script clones the pinned tag itself).
     Tests/Scripts/build-ffmpeg-macos.sh [--clean]
 
 ## Enabled components
-`demuxer=matroska`, `decoder=dca`, `decoder=ac3`, `decoder=eac3`,
-`parser=ac3`, `protocol=file`; everything else
+`demuxer=matroska`, `demuxer=mov`, `decoder=dca`, `decoder=ac3`,
+`decoder=eac3`, `parser=ac3`, `protocol=file`; everything else
 disabled (`--disable-everything`). NO `--enable-gpl` → LGPL v2.1+ only.
 No h264 parser by design: H.264 (AVCC extradata) goes straight to
 VideoToolbox (`CMVideoFormatDescriptionCreateFromH264ParameterSets`).
+No aac decoder by design: AAC decodes through AudioToolbox (the FFmpeg aac
+decoder would add ~230 KB to libavcodec).
 
 ## Runtime linkage
 The dylibs carry `@rpath/` install names (e.g.
