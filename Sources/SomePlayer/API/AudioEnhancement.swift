@@ -4,7 +4,7 @@ import Foundation
 /// is the mode's stable identity (survives user-defaults round trips), and
 /// each mode maps to one pinned `AudioEnhancementPreset`.
 public enum AudioEnhancementMode: String, CaseIterable, Sendable, Identifiable {
-  case original, balanced, dialogue
+  case original, balanced, dialogue, night
 
   public var id: String { rawValue }
 
@@ -14,6 +14,7 @@ public enum AudioEnhancementMode: String, CaseIterable, Sendable, Identifiable {
     case .original: return "Original"
     case .balanced: return "Balanced"
     case .dialogue: return "Enhance Dialogue"
+    case .night: return "Reduce Loud Sounds"
     }
   }
 }

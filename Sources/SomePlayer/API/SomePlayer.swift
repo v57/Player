@@ -68,9 +68,15 @@ public struct PlayerChapter: Equatable, Sendable {
   /// Active subtitle track id (nil = subtitles off).
   var subtitleTrackID: Int? { get }
 
-  /// Dialogue-enhancement mode (Original / Balanced / Enhance Dialogue).
-  /// Settable during playback — parameter-only in the engine, no restart.
+  /// Audio mode (Original / Balanced / Enhance Dialogue / Reduce Loud
+  /// Sounds). Settable during playback — parameter-only in the engine, no
+  /// restart.
   var enhancementMode: AudioEnhancementMode { get set }
+
+  /// "Even Out Loudness": steers every file toward the same integrated
+  /// loudness (EBU R128, -23 LUFS), learned while it plays. Independent of
+  /// the mode; settable during playback.
+  var normalizesLoudness: Bool { get set }
 
   /// Chapter list (title + start time), empty when the file has none.
   var chapters: [PlayerChapter] { get }

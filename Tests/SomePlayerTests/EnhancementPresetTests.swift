@@ -10,7 +10,7 @@ final class EnhancementPresetTests: XCTestCase {
     compressorHeadroomDB: Float, compressorAttack: Float, compressorRelease: Float,
     compressorMasterGainDB: Float, limiterEnabled: Bool, limiterPreGainDB: Float,
     limiterAttack: Float, limiterRelease: Float, eqEnabled: Bool, eqFrequency: Float,
-    eqGainDB: Float, eqQ: Float
+    eqGainDB: Float, eqQ: Float, sideGainDB: Float = 0, bassShelfGainDB: Float = 0
   ) -> AudioEnhancementPreset {
     AudioEnhancementPreset(
       centerGainDB: centerGainDB, compressionEnabled: compressionEnabled,
@@ -19,7 +19,7 @@ final class EnhancementPresetTests: XCTestCase {
       compressorMasterGainDB: compressorMasterGainDB, limiterEnabled: limiterEnabled,
       limiterPreGainDB: limiterPreGainDB, limiterAttack: limiterAttack,
       limiterRelease: limiterRelease, eqEnabled: eqEnabled, eqFrequency: eqFrequency,
-      eqGainDB: eqGainDB, eqQ: eqQ)
+      eqGainDB: eqGainDB, eqQ: eqQ, sideGainDB: sideGainDB, bassShelfGainDB: bassShelfGainDB)
   }
 
   private var expectedOriginal: AudioEnhancementPreset {
@@ -43,7 +43,17 @@ final class EnhancementPresetTests: XCTestCase {
       centerGainDB: 3, compressionEnabled: true, compressorThresholdDB: -22,
       compressorHeadroomDB: 12, compressorAttack: 0.020, compressorRelease: 0.200,
       compressorMasterGainDB: 3, limiterEnabled: true, limiterPreGainDB: 1, limiterAttack: 0.012,
-      limiterRelease: 0.250, eqEnabled: true, eqFrequency: 2000, eqGainDB: 2, eqQ: 1.0)
+      limiterRelease: 0.250, eqEnabled: true, eqFrequency: 2000, eqGainDB: 2, eqQ: 1.0,
+      sideGainDB: -4)
+  }
+
+  private var expectedNight: AudioEnhancementPreset {
+    makePreset(
+      centerGainDB: 3, compressionEnabled: true, compressorThresholdDB: -32,
+      compressorHeadroomDB: 4, compressorAttack: 0.005, compressorRelease: 0.300,
+      compressorMasterGainDB: 6, limiterEnabled: true, limiterPreGainDB: 0, limiterAttack: 0.012,
+      limiterRelease: 0.250, eqEnabled: true, eqFrequency: 2000, eqGainDB: 2, eqQ: 1.0,
+      sideGainDB: -4, bassShelfGainDB: -6)
   }
 
   // MARK: - preset(for:) mapping
@@ -60,22 +70,28 @@ final class EnhancementPresetTests: XCTestCase {
     XCTAssertEqual(AudioEnhancementPreset.preset(for: .dialogue), expectedDialogue)
   }
 
+  func testPresetForNightPinsValues() {
+    XCTAssertEqual(AudioEnhancementPreset.preset(for: .night), expectedNight)
+  }
+
   // MARK: - Mode identity
 
   func testDisplayNames() {
     XCTAssertEqual(AudioEnhancementMode.original.displayName, "Original")
     XCTAssertEqual(AudioEnhancementMode.balanced.displayName, "Balanced")
     XCTAssertEqual(AudioEnhancementMode.dialogue.displayName, "Enhance Dialogue")
+    XCTAssertEqual(AudioEnhancementMode.night.displayName, "Reduce Loud Sounds")
   }
 
   func testRawValueRoundTripAndAllCases() {
     XCTAssertEqual(AudioEnhancementMode(rawValue: "original"), .original)
     XCTAssertEqual(AudioEnhancementMode(rawValue: "balanced"), .balanced)
     XCTAssertEqual(AudioEnhancementMode(rawValue: "dialogue"), .dialogue)
+    XCTAssertEqual(AudioEnhancementMode(rawValue: "night"), .night)
     XCTAssertNil(AudioEnhancementMode(rawValue: "surround"))
-    XCTAssertEqual(AudioEnhancementMode.allCases.count, 3)
+    XCTAssertEqual(AudioEnhancementMode.allCases.count, 4)
     XCTAssertEqual(
-      AudioEnhancementMode.allCases.map(\.rawValue), ["original", "balanced", "dialogue"])
+      AudioEnhancementMode.allCases.map(\.rawValue), ["original", "balanced", "dialogue", "night"])
   }
 
   func testIdentifiableIDIsRawValue() {
@@ -93,6 +109,8 @@ final class EnhancementPresetTests: XCTestCase {
     XCTAssertEqual(preset.compressorMasterGainDB, 0)
     XCTAssertEqual(preset.limiterPreGainDB, 0)
     XCTAssertEqual(preset.eqGainDB, 0)
+    XCTAssertEqual(preset.sideGainDB, 0)
+    XCTAssertEqual(preset.bassShelfGainDB, 0)
   }
 
   func testBalancedHasCompressionAndLimiterButNoEQ() {
@@ -115,6 +133,35 @@ final class EnhancementPresetTests: XCTestCase {
     let original = AudioEnhancementPreset.preset(for: .original).centerGainDB
     XCTAssertGreaterThan(dialogue, balanced)
     XCTAssertGreaterThan(balanced, original)
+  }
+
+  func testNightCompressesHarderThanDialogue() {
+    let night = AudioEnhancementPreset.preset(for: .night)
+    let dialogue = AudioEnhancementPreset.preset(for: .dialogue)
+    XCTAssertLessThan(night.compressorThresholdDB, dialogue.compressorThresholdDB)
+    XCTAssertLessThan(night.compressorHeadroomDB, dialogue.compressorHeadroomDB)
+    XCTAssertLessThan(night.compressorAttack, dialogue.compressorAttack)
+    XCTAssertLessThan(night.bassShelfGainDB, 0)
+    XCTAssertTrue(night.limiterEnabled)
+  }
+
+  func testSideLevelOnlyLowersAndOnlyInDialogueModes() {
+    for mode in AudioEnhancementMode.allCases {
+      let preset = AudioEnhancementPreset.preset(for: mode)
+      XCTAssertLessThanOrEqual(preset.sideGainDB, 0, "\(mode.rawValue): side level never boosts")
+      XCTAssertEqual(preset.sideGainDB < 0, mode == .dialogue || mode == .night)
+    }
+  }
+
+  func testEveryGainingPresetEngagesTheLimiter() {
+    // Clipping-safe by construction: any stage that adds gain feeds the limiter.
+    for mode in AudioEnhancementMode.allCases {
+      let p = AudioEnhancementPreset.preset(for: mode)
+      let gains =
+        p.centerGainDB > 0 || p.compressorMasterGainDB > 0 || p.limiterPreGainDB > 0
+        || (p.eqEnabled && p.eqGainDB > 0)
+      if gains { XCTAssertTrue(p.limiterEnabled, "\(mode.rawValue) adds gain without the limiter") }
+    }
   }
 
   // MARK: - Headroom guard

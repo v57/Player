@@ -134,4 +134,41 @@ final class DownmixMatrixTests: XCTestCase {
     // Max column sum = 1 (frontL) + 0.9986 (center) + 0.707 (sideL) = 2.7056
     XCTAssertEqual(peak, 8.65, accuracy: 0.05)
   }
+
+  // MARK: - Stereo side level
+
+  func testStereoIdentityAtZeroDB() {
+    XCTAssertNil(DownmixMatrix.stereoCoefficients(sideGainDB: 0))
+    XCTAssertNil(DownmixMatrix.stereoCoefficients(sideGainDB: 3), "boosting the side is refused")
+  }
+
+  func testStereoMatrixKeepsCenterAndLowersSide() throws {
+    let m = try XCTUnwrap(DownmixMatrix.stereoCoefficients(sideGainDB: -6))
+    let side: Float = pow(10, -6 / 20)
+    func apply(_ l: Float, _ r: Float) -> (Float, Float) {
+      (l * m[0][0] + r * m[1][0], l * m[0][1] + r * m[1][1])
+    }
+    // Centered (L == R): unchanged.
+    let center = apply(0.5, 0.5)
+    XCTAssertEqual(center.0, 0.5, accuracy: 1e-6)
+    XCTAssertEqual(center.1, 0.5, accuracy: 1e-6)
+    // Pure side (L == -R): scaled by the side gain.
+    let wide = apply(0.5, -0.5)
+    XCTAssertEqual(wide.0, 0.5 * side, accuracy: 1e-6)
+    XCTAssertEqual(wide.1, -0.5 * side, accuracy: 1e-6)
+  }
+
+  func testStereoMatrixCannotRaiseAPeak() throws {
+    // Non-negative coefficients summing to 1 per output: |out| <= max(|L|, |R|).
+    let m = try XCTUnwrap(DownmixMatrix.stereoCoefficients(sideGainDB: -4))
+    for out in 0..<2 {
+      XCTAssertGreaterThanOrEqual(m[0][out], 0)
+      XCTAssertGreaterThanOrEqual(m[1][out], 0)
+      XCTAssertEqual(m[0][out] + m[1][out], 1, accuracy: 1e-6)
+    }
+    for (l, r) in [(Float(1), Float(1)), (1, -1), (1, 0), (-1, 0.3)] {
+      XCTAssertLessThanOrEqual(abs(l * m[0][0] + r * m[1][0]), max(abs(l), abs(r)) + 1e-6)
+      XCTAssertLessThanOrEqual(abs(l * m[0][1] + r * m[1][1]), max(abs(l), abs(r)) + 1e-6)
+    }
+  }
 }

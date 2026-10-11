@@ -38,6 +38,7 @@ import SwiftUI
       NSLog(
         "[App] enhancement mode at launch: %@ (defaults %@)", effective.rawValue, restored.rawValue)
       engine.enhancementMode = effective
+      engine.normalizesLoudness = AudioEnhancementPreferences.normalizesLoudness
     }
     _player = StateObject(wrappedValue: box)
     _uiState = StateObject(wrappedValue: PlayerUIState(player: box))

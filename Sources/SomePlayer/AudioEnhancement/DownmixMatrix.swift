@@ -29,6 +29,21 @@ public enum DownmixMatrix {
     }
   }
 
+  /// 2x2 mid/side matrix for a STEREO source, or nil at 0 dB (identity).
+  /// With M = (L+R)/2, S = (L-R)/2 and s = 10^(sideGainDB/20):
+  /// L' = M + s*S = L*(1+s)/2 + R*(1-s)/2, R' = M - s*S = L*(1-s)/2 + R*(1+s)/2.
+  /// Centered content (L == R, where dialogue sits) passes unchanged; wide
+  /// content drops. Both coefficients are >= 0 and sum to 1, so
+  /// |L'|, |R'| <= max(|L|, |R|): no peak can rise (clipping-safe without a
+  /// limiter). Positive gains are clamped to 0 dB.
+  public static func stereoCoefficients(sideGainDB: Float) -> [[Float]]? {
+    guard sideGainDB < 0 else { return nil }
+    let side = pow(10.0, sideGainDB / 20.0)
+    let same = (1 + side) / 2
+    let cross = (1 - side) / 2
+    return [[same, cross], [cross, same]]
+  }
+
   /// Worst-case pre-limiter peak (dBFS) of a simultaneous full-scale
   /// signal on every source channel: 20*log10(max over L,R of the
   /// per-output coefficient sums). Used by the presets' clipping guard.

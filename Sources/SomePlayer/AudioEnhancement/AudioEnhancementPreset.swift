@@ -1,7 +1,7 @@
 import Foundation
 
 /// Immutable tuning snapshot for the audio enhancement chain: downmix center
-/// boost, compressor, limiter, and EQ. Values are pinned per mode by
+/// boost, stereo side level, compressor, limiter, and EQ. Values are pinned per mode by
 /// `preset(for:)`; a preset never mutates after construction.
 public struct AudioEnhancementPreset: Equatable, Sendable {
   /// Center-channel boost applied IN the downmix matrix (multichannel
@@ -33,13 +33,22 @@ public struct AudioEnhancementPreset: Equatable, Sendable {
   public let eqGainDB: Float
   /// EQ bandwidth (Q).
   public let eqQ: Float
+  /// Side (L-R) level for STEREO sources, dB, <= 0: lowers what is panned
+  /// wide (music, effects) against what sits in the middle (dialogue).
+  /// Each output channel's coefficients sum to 1, so it can never raise a
+  /// peak (DownmixMatrix.stereoCoefficients).
+  public let sideGainDB: Float
+  /// Low-shelf gain at `bassShelfFrequency`, dB (night mode: less rumble);
+  /// 0 bypasses the band.
+  public let bassShelfGainDB: Float
+  public static let bassShelfFrequency: Float = 120
 
   public init(
     centerGainDB: Float, compressionEnabled: Bool, compressorThresholdDB: Float,
     compressorHeadroomDB: Float, compressorAttack: Float, compressorRelease: Float,
     compressorMasterGainDB: Float, limiterEnabled: Bool, limiterPreGainDB: Float,
     limiterAttack: Float, limiterRelease: Float, eqEnabled: Bool, eqFrequency: Float,
-    eqGainDB: Float, eqQ: Float
+    eqGainDB: Float, eqQ: Float, sideGainDB: Float = 0, bassShelfGainDB: Float = 0
   ) {
     self.centerGainDB = centerGainDB
     self.compressionEnabled = compressionEnabled
@@ -56,10 +65,13 @@ public struct AudioEnhancementPreset: Equatable, Sendable {
     self.eqFrequency = eqFrequency
     self.eqGainDB = eqGainDB
     self.eqQ = eqQ
+    self.sideGainDB = sideGainDB
+    self.bassShelfGainDB = bassShelfGainDB
   }
 
-  /// The pinned preset for the given mode. Values are spec-mandated and
-  /// must not drift: sibling pipeline agents rely on these exact numbers.
+  /// The pinned preset for the given mode. EnhancementPresetTests pins
+  /// these exact numbers; change both together, and keep every gain stage
+  /// ahead of the limiter (clipping-safe by construction).
   public static func preset(for mode: AudioEnhancementMode) -> AudioEnhancementPreset {
     switch mode {
     case .original:
@@ -79,7 +91,18 @@ public struct AudioEnhancementPreset: Equatable, Sendable {
         centerGainDB: 3, compressionEnabled: true, compressorThresholdDB: -22,
         compressorHeadroomDB: 12, compressorAttack: 0.020, compressorRelease: 0.200,
         compressorMasterGainDB: 3, limiterEnabled: true, limiterPreGainDB: 1, limiterAttack: 0.012,
-        limiterRelease: 0.250, eqEnabled: true, eqFrequency: 2000, eqGainDB: 2, eqQ: 1.0)
+        limiterRelease: 0.250, eqEnabled: true, eqFrequency: 2000, eqGainDB: 2, eqQ: 1.0,
+        sideGainDB: -4)
+    case .night:
+      // Heavy, fast compression (low threshold, little headroom) with make-up
+      // gain: loud effects come down, quiet speech comes up. Dialogue lift
+      // as in Enhance Dialogue, and less bass, which carries furthest.
+      return AudioEnhancementPreset(
+        centerGainDB: 3, compressionEnabled: true, compressorThresholdDB: -32,
+        compressorHeadroomDB: 4, compressorAttack: 0.005, compressorRelease: 0.300,
+        compressorMasterGainDB: 6, limiterEnabled: true, limiterPreGainDB: 0, limiterAttack: 0.012,
+        limiterRelease: 0.250, eqEnabled: true, eqFrequency: 2000, eqGainDB: 2, eqQ: 1.0,
+        sideGainDB: -4, bassShelfGainDB: -6)
     }
   }
 

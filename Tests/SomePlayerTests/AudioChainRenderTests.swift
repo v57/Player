@@ -60,16 +60,16 @@ final class AudioChainRenderTests: XCTestCase {
   }
 
   /// Renders everything through a fresh chain+engine. Returns the output.
-  private func renderOnce(preset: AudioEnhancementPreset, input: AVAudioPCMBuffer) throws
-    -> AVAudioPCMBuffer
-  {
+  private func renderOnce(
+    preset: AudioEnhancementPreset, input: AVAudioPCMBuffer, limiterRequired: Bool = false
+  ) throws -> AVAudioPCMBuffer {
     let engine = AVAudioEngine()
     try engine.enableManualRenderingMode(.offline, format: stereo, maximumFrameCount: 1024)
     let player = AVAudioPlayerNode()
     engine.attach(player)
     let chain = try makeChain(engine)
     chain.install(player: player, mainMixer: engine.mainMixerNode, format: stereo)
-    chain.apply(preset: preset)
+    chain.apply(preset: preset, limiterRequired: limiterRequired)
     try? engine.start()
     player.scheduleBuffer(input, at: nil)
     player.play()
@@ -121,6 +121,51 @@ final class AudioChainRenderTests: XCTestCase {
       "compression must narrow the quiet/loud gap (input ratio 16x)")
     XCTAssertLessThan(loudRMS, 0.4, "loud input must be restrained")
     XCTAssertGreaterThan(quietRMS, 0.02, "quiet content must survive")
+  }
+
+  // MARK: - Night mode
+
+  func testNightNarrowsLoudnessMoreThanBalanced() throws {
+    func ratio(_ mode: AudioEnhancementMode) throws -> (ratio: Float, quiet: Float) {
+      let quiet = rms(try renderOnce(preset: .preset(for: mode), input: tone(0.02, frames: 24_000)))
+      let loud = rms(try renderOnce(preset: .preset(for: mode), input: tone(0.8, frames: 24_000)))
+      return (loud / max(quiet, 1e-6), quiet)
+    }
+    let night = try ratio(.night)
+    let balanced = try ratio(.balanced)
+    let original = try ratio(.original)
+    print(
+      "[Audio] quiet/loud ratio (input 40): original \(original.ratio), balanced \(balanced.ratio), night \(night.ratio)"
+    )
+    XCTAssertLessThan(night.ratio, balanced.ratio * 0.7, "night evens out more than balanced")
+    XCTAssertGreaterThan(night.quiet, original.quiet, "night raises quiet content")
+  }
+
+  func testNightCutsBass() throws {
+    let bass = rms(
+      try renderOnce(preset: .preset(for: .night), input: tone(0.05, frequency: 60, frames: 24_000))
+    )
+    let mid = rms(
+      try renderOnce(
+        preset: .preset(for: .night), input: tone(0.05, frequency: 1000, frames: 24_000)))
+    XCTAssertLessThan(bass, mid * 0.7, "night lowers 60 Hz against 1 kHz")
+  }
+
+  func testNightStaysBelowCeiling() throws {
+    let out = try renderOnce(preset: .preset(for: .night), input: tone(1.0, frames: 24_000))
+    XCTAssertLessThanOrEqual(peak(out), 0.93)
+  }
+
+  // MARK: - Loudness normalization's limiter (original mode)
+
+  func testRequiredLimiterHoldsABoostedOriginalBelowCeiling() throws {
+    // Normalization's largest boost (+6 dB) on a full-scale tone in original
+    // mode: the required limiter + trim must keep it at -1 dBFS.
+    let boost = Float(pow(10, LoudnessNormalizer.maxBoostDB / 20))
+    let out = try renderOnce(
+      preset: .preset(for: .original), input: tone(boost, frames: 24_000), limiterRequired: true)
+    XCTAssertLessThanOrEqual(peak(out), 0.93)
+    XCTAssertGreaterThan(peak(out), 0.5)
   }
 
   // MARK: - Limiter / ceiling (dialogue)

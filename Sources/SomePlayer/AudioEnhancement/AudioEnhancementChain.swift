@@ -45,7 +45,8 @@ final class AudioEnhancementChain {
     else { return nil }
     self.dynamics = dyn
     self.limiter = lim
-    self.eq = AVAudioUnitEQ(numberOfBands: 1)
+    self.eq = AVAudioUnitEQ(numberOfBands: 2)
+    eq.bands[1].filterType = .lowShelf
   }
 
   /// Attaches the units and connects player -> dynamics -> limiter -> EQ ->
@@ -66,6 +67,10 @@ final class AudioEnhancementChain {
   /// bypass for the compressor; preGain + bypass for the limiter; band
   /// freq/Q/gain + band bypass + global trim for the EQ).
   ///
+  /// `limiterRequired` engages the limiter (and the trim) even when the
+  /// preset leaves it off: loudness normalization boosts ahead of the chain
+  /// and relies on it (LoudnessNormalizer).
+  ///
   /// The -1 dBFS output ceiling is enforced by the limiter's internal
   /// ceiling MINUS a fixed trim applied through the EQ unit's global gain
   /// (the AULimiter exposes no output gain; the AUNBandEQ global gain is a
@@ -73,9 +78,11 @@ final class AudioEnhancementChain {
   /// a full-scale step through the dialogue chain peaks at ~1.08 (the
   /// dynamics' attack transient passes ~12 ms before the limiter clamps at
   /// its ~1.02 ceiling), so the trim is set to -2 dB to land the worst case
-  /// at ~0.86 (≤ -1 dBFS). Trim is active whenever compression is; original
-  /// mode: no trim, everything bypassed.
-  func apply(preset: AudioEnhancementPreset) {
+  /// at ~0.86 (≤ -1 dBFS). Trim is active whenever the limiter is; original
+  /// mode without normalization: no trim, everything bypassed.
+  func apply(preset: AudioEnhancementPreset, limiterRequired: Bool = false) {
+    let limiterEnabled = preset.limiterEnabled || limiterRequired
+
     // Compressor
     setParam(dynamics, kDynamicsProcessorParam_Threshold, preset.compressorThresholdDB, ramp: 0.08)
     setParam(dynamics, kDynamicsProcessorParam_HeadRoom, preset.compressorHeadroomDB, ramp: 0.08)
@@ -89,16 +96,21 @@ final class AudioEnhancementChain {
     setParam(limiter, kLimiterParam_PreGain, preset.limiterPreGainDB, ramp: 0.08)
     setParam(limiter, kLimiterParam_AttackTime, preset.limiterAttack, ramp: 0.08)
     setParam(limiter, kLimiterParam_DecayTime, preset.limiterRelease, ramp: 0.08)
-    setBypass(limiter, !preset.limiterEnabled)
+    setBypass(limiter, !limiterEnabled)
 
-    // EQ: one parametric band ~2 kHz (speech presence, dialogue only) and
-    // the global -1 dB trim while compression is engaged.
+    // EQ: one parametric band ~2 kHz (speech presence), a low shelf (night
+    // mode's bass cut; bypassed at 0 dB), and the global -2 dB trim while
+    // the limiter is engaged.
     let band = eq.bands[0]
     band.frequency = preset.eqFrequency
     band.gain = preset.eqGainDB
     band.bandwidth = preset.eqQ
     band.bypass = !preset.eqEnabled
-    setParam(eq, kAUNBandEQParam_GlobalGain, preset.compressionEnabled ? -2.0 : 0.0, ramp: 0.08)
+    let shelf = eq.bands[1]
+    shelf.frequency = AudioEnhancementPreset.bassShelfFrequency
+    shelf.gain = preset.bassShelfGainDB
+    shelf.bypass = preset.bassShelfGainDB == 0
+    setParam(eq, kAUNBandEQParam_GlobalGain, limiterEnabled ? -2.0 : 0.0, ramp: 0.08)
   }
 
   // MARK: - AU plumbing

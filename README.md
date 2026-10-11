@@ -3,8 +3,11 @@
 A native Mac video player for MKV and MP4, built on VideoToolbox and Metal.
 
 - Hardware H.264 and HEVC decoding (VideoToolbox), Metal rendering.
-- AAC, DTS, Dolby Digital (AC-3) and Dolby Digital Plus (E-AC-3) audio, with multichannel downmix
-  and audio modes for clearer dialogue.
+- AAC, DTS, Dolby Digital (AC-3) and Dolby Digital Plus (E-AC-3) audio, with multichannel downmix.
+- Audio modes (Audio menu): Original, Balanced, Enhance Dialogue (centre and speech lift, quieter
+  wide sound), and Reduce Loud Sounds (night mode: heavy compression, less bass). Even Out Loudness
+  plays every file at the same loudness (EBU R128, -23 LUFS), measured as it plays. A limiter follows
+  every stage that adds gain, so no mode can clip.
 - Text subtitles (SRT, ASS/SSA, WebVTT), with the chosen audio and subtitle tracks remembered.
 - Resumes where you left off; plays files that are still downloading.
 - Media keys and Now Playing.

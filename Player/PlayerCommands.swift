@@ -13,7 +13,9 @@ struct PlayerCommands: Commands {
     // About panel with the MIT and FFmpeg LGPL credits, and the update check.
     CommandGroup(replacing: .appInfo) {
       Button("About Player") { AboutPanel.show() }
-      Button("Check for Updates…") { Task { await UpdateChecker.shared.check(userInitiated: true) } }
+      Button("Check for Updates…") {
+        Task { await UpdateChecker.shared.check(userInitiated: true) }
+      }
       Toggle("Check for Updates Automatically", isOn: $checksForUpdates)
     }
     CommandGroup(before: .newItem) {
@@ -55,12 +57,25 @@ struct PlayerCommands: Commands {
       Divider()
       Section("Mode") {
         ForEach(AudioEnhancementMode.allCases) { mode in
-          Button(mode.displayName) {
-            player.enhancementMode = mode
-            AudioEnhancementPreferences.save(mode)
-          }
+          Toggle(
+            mode.displayName,
+            isOn: Binding(
+              get: { player.enhancementMode == mode },
+              set: { on in
+                guard on else { return }
+                player.enhancementMode = mode
+                AudioEnhancementPreferences.save(mode)
+              }))
         }
       }
+      Toggle(
+        "Even Out Loudness",
+        isOn: Binding(
+          get: { player.normalizesLoudness },
+          set: { on in
+            player.normalizesLoudness = on
+            AudioEnhancementPreferences.normalizesLoudness = on
+          }))
     }
     CommandMenu("Subtitles") {
       Toggle(

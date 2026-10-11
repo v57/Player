@@ -48,6 +48,14 @@ import SomePlayerCDemux
     }
   }
 
+  /// Loudness normalization; restored by the app like the mode.
+  @Published public var normalizesLoudness = false {
+    didSet {
+      guard normalizesLoudness != oldValue else { return }
+      controller.setNormalizesLoudness(normalizesLoudness)
+    }
+  }
+
   private var currentFilePath: String?
   /// The URL whose sandbox file access we hold open (user-selected files
   /// delivered via fileImporter/Open With are security-scoped). Kept for

@@ -173,4 +173,27 @@ final class PlaybackIntegrationTests: XCTestCase {
     XCTAssertNil(player.errorMessage)
     player.stop()
   }
+
+  /// Night mode and loudness normalization on a 5.1 AAC file: playback keeps
+  /// advancing through mode and normalization changes (parameter-only, no
+  /// graph rebuild), with no error.
+  func testAudioModesAndNormalizationSwitchDuringPlayback() async throws {
+    let url = try media("h264-aac-51.mp4")
+    let player = NativeSomePlayer()
+    player.enhancementMode = .night
+    player.normalizesLoudness = true
+    try await player.open(url)
+    XCTAssertNil(player.errorMessage)
+    try await waitUntil(5, "playing") { player.state == .playing }
+    try await waitUntil(8, "advancing") { player.position >= 4.0 }
+    player.normalizesLoudness = false
+    player.enhancementMode = .dialogue
+    try await waitUntil(5, "advancing after the switch") { player.position >= 5.5 }
+    player.enhancementMode = .original
+    player.normalizesLoudness = true
+    try await waitUntil(5, "advancing after the second switch") { player.position >= 7.0 }
+    XCTAssertNil(player.errorMessage)
+    XCTAssertTrue(player.isPlaying)
+    player.stop()
+  }
 }
