@@ -51,8 +51,7 @@ final class PlaybackIntegrationTests: XCTestCase {
 
     player.selectAudioTrack(2)
     player.selectSubtitleTrack(3)  // SRT: "Corpus sub one" 0.5-2.5 s
-    try await Task.sleep(nanoseconds: 300_000_000)
-    XCTAssertEqual(player.audioTrackID, 2)
+    try await waitUntil(5, "audio switch") { player.audioTrackID == 2 }
     player.seek(to: 1.0, exact: true)
     try await waitUntil(5, "SRT cue") { player.activeSubtitleCue == "Corpus sub one" }
 
@@ -170,8 +169,7 @@ final class PlaybackIntegrationTests: XCTestCase {
     XCTAssertEqual(player.audioTracks.map(\.isPlayable), [true, true])
     try await waitUntil(5, "playing") { player.state == .playing }
     player.selectAudioTrack(2)
-    try await Task.sleep(nanoseconds: 300_000_000)
-    XCTAssertEqual(player.audioTrackID, 2)
+    try await waitUntil(5, "audio switch") { player.audioTrackID == 2 }
     XCTAssertNil(player.errorMessage)
     player.stop()
   }
