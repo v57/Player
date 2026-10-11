@@ -8,7 +8,7 @@ import PackageDescription
 let ffmpegLibDir = Context.packageDirectory + "/Sources/FFmpeg/lib"
 
 let package = Package(
-  name: "SomePlayer", platforms: [.macOS(.v27)],
+  name: "SomePlayer", platforms: [.macOS(.v12)],
   products: [
     // Products define the executables and libraries a package produces, making them visible to other packages.
     .library(name: "SomePlayer", targets: ["SomePlayer"])

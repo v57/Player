@@ -24,6 +24,12 @@ FFMPEG_TAG="n7.1.5"
 FFMPEG_COMMIT="3a0867c2bfda4a4d4309ca1a8cbdc6175e67f587"   # git rev-parse n7.1.5^{}
 FFMPEG_REPO="https://github.com/FFmpeg/FFmpeg.git"
 
+#---- deployment target --------------------------------------------------------
+# Matches the SomePlayer package's platforms (Package.swift); the app itself
+# needs macOS 14 (SwiftData). Linking dylibs built for a newer macOS than the
+# app makes dyld refuse to load them on older systems.
+MACOS_MIN="12.0"
+
 #---- paths ------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -49,6 +55,7 @@ echo "==> build-ffmpeg-macos.sh"
 echo "    repo root : ${REPO_ROOT}"
 echo "    prefix    : ${PREFIX}"
 echo "    pinned    : ${FFMPEG_TAG} @ ${FFMPEG_COMMIT}"
+echo "    macOS min : ${MACOS_MIN}"
 echo "    jobs      : ${JOBS}"
 echo "    scratch   : ${SCRATCH}"
 
@@ -105,6 +112,8 @@ CONFIGURE_BASE=(
   --enable-parser=ac3
   --enable-protocol=file
   --arch=arm64
+  --extra-cflags=-mmacosx-version-min=${MACOS_MIN}
+  --extra-ldflags=-mmacosx-version-min=${MACOS_MIN}
   --prefix="${PREFIX}"
 )
 
@@ -163,9 +172,9 @@ EOF
 cat > "${PREFIX}/README.md" <<EOF
 # FFmpeg (minimal, LGPL) — Sources/FFmpeg
 
-Minimal shared FFmpeg build for the Player macOS app (arm64): Matroska and
-MP4/MOV demuxing + DTS (dca), Dolby Digital (ac3) and E-AC3 (eac3) decoding.
-Pinned to FFmpeg ${FFMPEG_TAG}
+Minimal shared FFmpeg build for the Player macOS app (arm64, macOS ${MACOS_MIN}+):
+Matroska and MP4/MOV demuxing + DTS (dca), Dolby Digital (ac3) and E-AC3 (eac3)
+decoding. Pinned to FFmpeg ${FFMPEG_TAG}
 (${FFMPEG_COMMIT}). Reproduced by \`Tests/Scripts/build-ffmpeg-macos.sh\` — no
 Homebrew dependency (the script clones the pinned tag itself).
 
@@ -407,7 +416,8 @@ protocols="$(grep -E '^#define CONFIG_.*_PROTOCOL 1$' "${CFG}" | sed 's/^#define
   echo
   echo "## Architecture"
   for f in "${AV_LIBS[@]}"; do
-    echo "- \`$(basename "${f}")\`: $(lipo -archs "${f}")"
+    minos="$(otool -l "${f}" | awk '/LC_BUILD_VERSION/{b=1} b && $1=="minos"{print $2; exit}')"
+    echo "- \`$(basename "${f}")\`: $(lipo -archs "${f}"), minimum macOS ${minos}"
   done
   echo
   echo "## Size report (\`du -h\`)"
@@ -449,6 +459,13 @@ for f in "${AV_LIBS[@]}"; do
   fi
 done
 "${FFPROBE_RUN[@]}" -version | head -1
+for f in "${AV_LIBS[@]}"; do
+  minos="$(otool -l "${f}" | awk '/LC_BUILD_VERSION/{b=1} b && $1=="minos"{print $2; exit}')"
+  if [[ "${minos}" != "${MACOS_MIN}" ]]; then
+    echo "ERROR: ${f##*/} minimum macOS is ${minos}, expected ${MACOS_MIN}" >&2
+    ok=0
+  fi
+done
 [[ "${ok}" == "1" ]] || exit 1
 
 echo
