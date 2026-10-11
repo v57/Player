@@ -8,6 +8,8 @@ struct PlayerCommands: Commands {
   @ObservedObject var uiState: PlayerUIState
 
   var body: some Commands {
+    // About panel with the MIT and FFmpeg LGPL credits.
+    CommandGroup(replacing: .appInfo) { Button("About Player") { AboutPanel.show() } }
     CommandGroup(before: .newItem) {
       Button("Open…") { uiState.showFileImporter = true }.keyboardShortcut("o", modifiers: .command)
     }
