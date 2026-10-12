@@ -1,7 +1,7 @@
 import Combine
 import Foundation
-import MediaPlayer  // Apple's framework — no longer shadowed (engine module is `SomePlayer` now)
-import SomePlayer   // engine: SomePlayerBox
+import MediaPlayer  // Apple's framework — no longer shadowed (engine module is `PlayerKit` now)
+import PlayerKit    // engine: SomePlayerBox
 
 /// Registers the player as a macOS "Now Playing" app and routes the
 /// Play/Next/Previous media keys to it, purely in Swift (no ObjC shim needed:

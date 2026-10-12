@@ -1,4 +1,4 @@
-import SomePlayer
+import PlayerKit
 import SwiftUI
 
 /// Bottom timeline: elapsed / total time plus a scrubbing slider.

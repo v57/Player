@@ -9,11 +9,11 @@
 //   - how many packets were consumed before an audio packet at/after the target
 //
 // Build/run (minimal ThirdParty-style build):
-//   clang -c ../../Sources/SomePlayerCDemux/MediaDemuxer.c \
+//   clang -c ../../Sources/PlayerCDemux/MediaDemuxer.c \
 //       -I ../../Sources/FFmpeg/include -o /tmp/MediaDemuxer.o
 //   xcrun swiftc seek-probe.swift /tmp/MediaDemuxer.o -I ../../Sources/FFmpeg/include \
 //       -L ../../Sources/FFmpeg/lib -lavformat -lavcodec -lavutil \
-//       -import-objc-header ../../Sources/SomePlayerCDemux/MediaDemuxer.h -o /tmp/seek-probe
+//       -import-objc-header ../../Sources/PlayerCDemux/MediaDemuxer.h -o /tmp/seek-probe
 //   DYLD_LIBRARY_PATH=../../Sources/FFmpeg/lib /tmp/seek-probe
 
 import Foundation

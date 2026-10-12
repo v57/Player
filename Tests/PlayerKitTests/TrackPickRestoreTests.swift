@@ -1,5 +1,5 @@
 import XCTest
-@testable import SomePlayer
+@testable import PlayerKit
 
 /// Regression test for the partial-download retry resetting the user's track
 /// selections to the container default. `openInternal` used to load the

@@ -1,5 +1,5 @@
 import Foundation
-import SomePlayerCDemux
+import PlayerCDemux
 
 /// Errors surfaced by the native demux path. The UI never sees FFmpeg error
 /// integers — translated at this boundary (plan section 31).

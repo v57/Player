@@ -25,7 +25,7 @@ FFMPEG_COMMIT="3a0867c2bfda4a4d4309ca1a8cbdc6175e67f587"   # git rev-parse n7.1.
 FFMPEG_REPO="https://github.com/FFmpeg/FFmpeg.git"
 
 #---- deployment target --------------------------------------------------------
-# Matches the SomePlayer package's platforms (Package.swift); the app itself
+# Matches the Player package's platforms (Package.swift); the app itself
 # needs macOS 14 (SwiftData). Linking dylibs built for a newer macOS than the
 # app makes dyld refuse to load them on older systems.
 MACOS_MIN="12.0"

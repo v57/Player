@@ -1,5 +1,5 @@
 import Foundation
-import SomePlayerCDemux
+import PlayerCDemux
 
 /// The FFmpeg build linked at runtime, read from the loaded dylibs (not
 /// hardcoded) so the app's license notice always matches what ships.

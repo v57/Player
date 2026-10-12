@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import SomePlayer
+@testable import PlayerKit
 
 /// Pure-logic regressions for the playback engine's transport mailbox, audio
 /// routing, subtitle handling and colour conversion. None of these need a

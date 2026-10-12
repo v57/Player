@@ -92,7 +92,7 @@ printf '\xde\xad\xbe\xef' | dd of=h264-corrupt.mkv bs=1 seek=$((CSIZE * 4 / 10))
 gen h264-long.mkv -f lavfi -i testsrc2=duration=120:size=320x180:rate=30 \
   -c:v libx264 -pix_fmt yuv420p -an
 
-# 12-14. Playable AC3 samples for Tests/SomePlayerTests/PlaybackIntegrationTests.
+# 12-14. Playable AC3 samples for Tests/PlayerKitTests/PlaybackIntegrationTests.
 # Mono AC3 FIRST (used to crash), then stereo AC3, + SRT + ASS subtitles.
 gen h264-ac3-mono-stereo-subs.mkv -f lavfi -i testsrc2=duration=8:size=640x360:rate=24 \
   -f lavfi -i "sine=frequency=440:duration=8" -f lavfi -i "sine=frequency=660:duration=8" \

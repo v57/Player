@@ -7,8 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		267577EF3037555800FB9989 /* SomePlayer in Frameworks */ = {isa = PBXBuildFile; productRef = 267577EE3037555800FB9989 /* SomePlayer */; };
-		A9D0C0DE0000000000000003 /* AppUpdater in Frameworks */ = {isa = PBXBuildFile; productRef = A9D0C0DE0000000000000002 /* AppUpdater */; };
+		267577EF3037555800FB9989 /* PlayerKit in Frameworks */ = {isa = PBXBuildFile; productRef = 267577EE3037555800FB9989 /* PlayerKit */; };
+		A9D0C0DE0000000000000003 /* UpdateKit in Frameworks */ = {isa = PBXBuildFile; productRef = A9D0C0DE0000000000000002 /* UpdateKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,8 +40,8 @@
 		000000000000000130000000 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
-				267577EF3037555800FB9989 /* SomePlayer in Frameworks */,
-				A9D0C0DE0000000000000003 /* AppUpdater in Frameworks */,
+				267577EF3037555800FB9989 /* PlayerKit in Frameworks */,
+				A9D0C0DE0000000000000003 /* UpdateKit in Frameworks */,
 			);
 		};
 /* End PBXFrameworksBuildPhase section */
@@ -82,8 +82,8 @@
 			);
 			name = Player;
 			packageProductDependencies = (
-				267577EE3037555800FB9989 /* SomePlayer */,
-				A9D0C0DE0000000000000002 /* AppUpdater */,
+				267577EE3037555800FB9989 /* PlayerKit */,
+				A9D0C0DE0000000000000002 /* UpdateKit */,
 			);
 			productName = MyApp;
 			productReference = 000000000000000000000120 /* Player.app */;
@@ -115,7 +115,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				267577ED3037555800FB9989 /* XCLocalSwiftPackageReference "../Player" */,
-				A9D0C0DE0000000000000001 /* XCLocalSwiftPackageReference "../AppUpdater" */,
+				A9D0C0DE0000000000000001 /* XCLocalSwiftPackageReference "../UpdateKit" */,
 			);
 			preferredProjectObjectVersion = 90;
 			productRefGroup = 000000000000000000000020 /* Products */;
@@ -435,20 +435,20 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Player;
 		};
-		A9D0C0DE0000000000000001 /* XCLocalSwiftPackageReference "../AppUpdater" */ = {
+		A9D0C0DE0000000000000001 /* XCLocalSwiftPackageReference "../UpdateKit" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = ../AppUpdater;
+			relativePath = ../UpdateKit;
 		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		267577EE3037555800FB9989 /* SomePlayer */ = {
+		267577EE3037555800FB9989 /* PlayerKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = SomePlayer;
+			productName = PlayerKit;
 		};
-		A9D0C0DE0000000000000002 /* AppUpdater */ = {
+		A9D0C0DE0000000000000002 /* UpdateKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = AppUpdater;
+			productName = UpdateKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -1,6 +1,6 @@
 import Combine
 import Foundation
-import SomePlayer
+import PlayerKit
 import SwiftUI
 import UniformTypeIdentifiers
 
