@@ -58,6 +58,10 @@ import Foundation
     get { engine.enhancementMode }
     set { engine.enhancementMode = newValue }
   }
+  public var normalizesLoudness: Bool {
+    get { engine.normalizesLoudness }
+    set { engine.normalizesLoudness = newValue }
+  }
   public var chapters: [PlayerChapter] { engine.chapters }
 
   public func open(_ url: URL) async throws { try await engine.open(url) }

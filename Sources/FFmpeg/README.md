@@ -1,8 +1,8 @@
 # FFmpeg (minimal, LGPL) — Sources/FFmpeg
 
-Minimal shared FFmpeg build for the Player macOS app (arm64): Matroska and
-MP4/MOV demuxing + DTS (dca), Dolby Digital (ac3) and E-AC3 (eac3) decoding.
-Pinned to FFmpeg n7.1.5
+Minimal shared FFmpeg build for the Player macOS app (arm64, macOS 12.0+):
+Matroska and MP4/MOV demuxing + DTS (dca), Dolby Digital (ac3) and E-AC3 (eac3)
+decoding. Pinned to FFmpeg n7.1.5
 (3a0867c2bfda4a4d4309ca1a8cbdc6175e67f587). Reproduced by `Tests/Scripts/build-ffmpeg-macos.sh` — no
 Homebrew dependency (the script clones the pinned tag itself).
 

@@ -204,6 +204,16 @@ int media_audio_decoder_receive(MediaAudioDecoder *dec, MediaAudioFrame *out);
 int media_audio_decoder_flush(MediaAudioDecoder *dec);
 void media_audio_decoder_free(MediaAudioDecoder *dec);
 
+/* ---- linked FFmpeg (read from the loaded dylibs, for the license notice) ----
+   Static strings owned by FFmpeg; never free them. */
+/* av_version_info(), e.g. "n7.1.5". */
+const char *media_ffmpeg_version(void);
+/* The libraries' license, e.g. "LGPL version 2.1 or later". Returns the
+   libavformat string; NULL when libavformat/libavcodec/libavutil disagree. */
+const char *media_ffmpeg_license(void);
+/* The configure line the dylibs were built with. */
+const char *media_ffmpeg_configuration(void);
+
 #ifdef __cplusplus
 }
 #endif

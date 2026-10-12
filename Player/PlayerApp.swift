@@ -1,3 +1,4 @@
+import AppUpdater
 import SomePlayer
 import SwiftUI
 
@@ -36,6 +37,11 @@ import SwiftUI
   /// trace gets to record the attempt before the event is swallowed.
   private let inputShield: InputShield
 
+  /// Updates from GitHub Releases (Player.zip, built by
+  /// Tests/Scripts/release-macos.sh): checked daily, installed in place with
+  /// a relaunch. App-lifetime.
+  private let updater = AppUpdater(github: "v57/Player", assetName: "Player.zip")
+
   init() {
     let box = SomePlayerBox(engine: NativeSomePlayer())
     // Inject the SwiftData-backed store into the engine's persistence
@@ -54,6 +60,7 @@ import SwiftUI
       NSLog(
         "[App] enhancement mode at launch: %@ (defaults %@)", effective.rawValue, restored.rawValue)
       engine.enhancementMode = effective
+      engine.normalizesLoudness = AudioEnhancementPreferences.normalizesLoudness
     }
     _player = StateObject(wrappedValue: box)
     _uiState = StateObject(wrappedValue: PlayerUIState(player: box))
@@ -70,6 +77,7 @@ import SwiftUI
     } else {
       nowPlaying = NowPlayingController(player: box)
     }
+    updater.start()
   }
 
   var body: some Scene {
@@ -101,6 +109,7 @@ import SwiftUI
     // initial window for the event instead of dropping it.
     .handlesExternalEvents(matching: ["*"]).commands {
       PlayerCommands(player: player, uiState: uiState)
+      UpdaterCommands(updater: updater)
       // WindowGroup also contributes File > New Window (Cmd+N), which
       // would create the same unusable second window.
       CommandGroup(replacing: .newItem) {}

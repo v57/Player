@@ -872,3 +872,16 @@ void media_audio_decoder_free(MediaAudioDecoder *ad) {
     free(ad->at_scratch);
     free(ad);
 }
+
+/* ---- linked FFmpeg ------------------------------------------------------ */
+
+const char *media_ffmpeg_version(void) { return av_version_info(); }
+
+const char *media_ffmpeg_license(void) {
+    const char *format = avformat_license();
+    if (strcmp(format, avcodec_license()) != 0 || strcmp(format, avutil_license()) != 0)
+        return NULL;
+    return format;
+}
+
+const char *media_ffmpeg_configuration(void) { return avformat_configuration(); }

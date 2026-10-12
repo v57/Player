@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		267577EF3037555800FB9989 /* SomePlayer in Frameworks */ = {isa = PBXBuildFile; productRef = 267577EE3037555800FB9989 /* SomePlayer */; };
+		A9D0C0DE0000000000000003 /* AppUpdater in Frameworks */ = {isa = PBXBuildFile; productRef = A9D0C0DE0000000000000002 /* AppUpdater */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,6 +41,7 @@
 			isa = PBXFrameworksBuildPhase;
 			files = (
 				267577EF3037555800FB9989 /* SomePlayer in Frameworks */,
+				A9D0C0DE0000000000000003 /* AppUpdater in Frameworks */,
 			);
 		};
 /* End PBXFrameworksBuildPhase section */
@@ -81,6 +83,7 @@
 			name = Player;
 			packageProductDependencies = (
 				267577EE3037555800FB9989 /* SomePlayer */,
+				A9D0C0DE0000000000000002 /* AppUpdater */,
 			);
 			productName = MyApp;
 			productReference = 000000000000000000000120 /* Player.app */;
@@ -112,6 +115,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				267577ED3037555800FB9989 /* XCLocalSwiftPackageReference "../Player" */,
+				A9D0C0DE0000000000000001 /* XCLocalSwiftPackageReference "../AppUpdater" */,
 			);
 			preferredProjectObjectVersion = 90;
 			productRefGroup = 000000000000000000000020 /* Products */;
@@ -244,7 +248,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -308,7 +312,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PROJECT_UNIQUE_VALUE = U6PPSBV8;
@@ -332,6 +336,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
 				INFOPLIST_FILE = Player/Info.plist;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -374,6 +379,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
 				INFOPLIST_FILE = Player/Info.plist;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -429,12 +435,20 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Player;
 		};
+		A9D0C0DE0000000000000001 /* XCLocalSwiftPackageReference "../AppUpdater" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../AppUpdater;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		267577EE3037555800FB9989 /* SomePlayer */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = SomePlayer;
+		};
+		A9D0C0DE0000000000000002 /* AppUpdater */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AppUpdater;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

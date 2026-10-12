@@ -8,6 +8,8 @@ struct PlayerCommands: Commands {
   @ObservedObject var uiState: PlayerUIState
 
   var body: some Commands {
+    // About panel with the MIT and FFmpeg LGPL credits.
+    CommandGroup(replacing: .appInfo) { Button("About Player") { AboutPanel.show() } }
     CommandGroup(before: .newItem) {
       Button("Open…") { uiState.showFileImporter = true }.keyboardShortcut("o", modifiers: .command)
     }
@@ -47,12 +49,25 @@ struct PlayerCommands: Commands {
       Divider()
       Section("Mode") {
         ForEach(AudioEnhancementMode.allCases) { mode in
-          Button(mode.displayName) {
-            player.enhancementMode = mode
-            AudioEnhancementPreferences.save(mode)
-          }
+          Toggle(
+            mode.displayName,
+            isOn: Binding(
+              get: { player.enhancementMode == mode },
+              set: { on in
+                guard on else { return }
+                player.enhancementMode = mode
+                AudioEnhancementPreferences.save(mode)
+              }))
         }
       }
+      Toggle(
+        "Even Out Loudness",
+        isOn: Binding(
+          get: { player.normalizesLoudness },
+          set: { on in
+            player.normalizesLoudness = on
+            AudioEnhancementPreferences.normalizesLoudness = on
+          }))
     }
     CommandMenu("Subtitles") {
       Toggle(

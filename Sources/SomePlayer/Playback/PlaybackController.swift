@@ -336,13 +336,27 @@ public final class PlaybackController: @unchecked Sendable {
       enhancementLock.unlock()
     }
   }
-  /// Source roles when the multichannel source is being downmixed app-side
-  /// to stereo (stereo output device); nil otherwise.
+  /// Source roles when the source goes through a matrix: a multichannel
+  /// source downmixed app-side to stereo, or a stereo source (side level,
+  /// DownmixMatrix.stereoCoefficients); nil otherwise.
   private var downmixRoles: [ChannelRole]?
-  /// Precomputed Nx2 matrices per mode (original/balanced/dialogue) for the
-  /// current source layout — buffer fill picks a matrix by mode with no
-  /// per-sample math.
+  /// Precomputed Nx2 matrices per mode for the current source layout —
+  /// buffer fill picks a matrix by mode with no per-sample math. A mode with
+  /// no entry passes the source through.
   private var downmixMatrices: [AudioEnhancementMode: [[Float]]] = [:]
+  /// Loudness normalization ("Even Out Loudness"). The flag is written from
+  /// the main thread; `limiterHeld` keeps the chain's limiter engaged while
+  /// normalization may have boosted scheduled audio (on, and for
+  /// `normalizationReleaseSeconds` after it is turned off — longer than
+  /// the scheduled lead plus the gain's release ramp).
+  private var normalizesLoudness = false
+  private var limiterHeld = false
+  private var limiterReleaseGeneration = 0
+  private let normalizationReleaseSeconds = 3.0
+  /// Measures and scales scheduled PCM; pipeline queue only.
+  private var loudnessNormalizer: LoudnessNormalizer?
+  /// Frames since the last loudness log line (every 10 s of audio).
+  private var loudnessLogFrames = 0
   private var audioFormatMismatchLogged = false
 
   private func currentMode() -> AudioEnhancementMode {
@@ -356,7 +370,7 @@ public final class PlaybackController: @unchecked Sendable {
   private func currentDownmixMatrix() -> [[Float]]? {
     enhancementLock.lock()
     defer { enhancementLock.unlock() }
-    guard let roles = downmixRoles, roles.count > 2 else { return nil }
+    guard let roles = downmixRoles, roles.count >= 2 else { return nil }
     return downmixMatrices[enhancementMode]
   }
 
@@ -368,11 +382,52 @@ public final class PlaybackController: @unchecked Sendable {
     enhancementLock.lock()
     enhancementMode = mode
     let chain = _enhancementChain
+    let limiterRequired = limiterHeld
     enhancementLock.unlock()
     if let chain {
-      chain.apply(preset: AudioEnhancementPreset.preset(for: mode))
+      chain.apply(preset: AudioEnhancementPreset.preset(for: mode), limiterRequired: limiterRequired)
     }
     NSLog("[Native] enhancement mode: %@", mode.rawValue)
+  }
+
+  /// Turns loudness normalization on or off (UI entry). On engages the
+  /// limiter at once (boosts rely on it); off lets the gain ramp back to
+  /// unity and releases the limiter only after the boosted buffers already
+  /// scheduled have played.
+  func setNormalizesLoudness(_ on: Bool) {
+    enhancementLock.lock()
+    normalizesLoudness = on
+    limiterReleaseGeneration += 1
+    let generation = limiterReleaseGeneration
+    if on { limiterHeld = true }
+    let chain = _enhancementChain
+    let mode = enhancementMode
+    enhancementLock.unlock()
+    NSLog("[Native] loudness normalization: %@", on ? "on" : "off")
+    if on {
+      chain?.apply(preset: AudioEnhancementPreset.preset(for: mode), limiterRequired: true)
+      return
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + normalizationReleaseSeconds) {
+      [weak self] in
+      guard let self else { return }
+      self.enhancementLock.lock()
+      guard generation == self.limiterReleaseGeneration else {
+        self.enhancementLock.unlock()
+        return
+      }
+      self.limiterHeld = false
+      let chain = self._enhancementChain
+      let mode = self.enhancementMode
+      self.enhancementLock.unlock()
+      chain?.apply(preset: AudioEnhancementPreset.preset(for: mode), limiterRequired: false)
+    }
+  }
+
+  private func normalizationEnabled() -> Bool {
+    enhancementLock.lock()
+    defer { enhancementLock.unlock() }
+    return normalizesLoudness
   }
 
   /// Current mode (MainActor-safe read for the UI).
@@ -1128,13 +1183,27 @@ public final class PlaybackController: @unchecked Sendable {
     let playerFormat: AVAudioFormat
     var matrices: [AudioEnhancementMode: [[Float]]] = [:]
     var roles: [ChannelRole]?
+    // BS.1770 channel weights for the loudness meter, in player-format order.
+    var loudnessWeights: [Double] = [1, 1]
     switch route {
     case .passthrough where channelCount == 6:
       guard let layout = AVAudioChannelLayout(layoutTag: kAudioChannelLayoutTag_MPEG_5_1_A) else {
         throw NativePlayerError.outputDeviceFailed
       }
       playerFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channelLayout: layout)
-    case .passthrough, .monoToStereo:
+      loudnessWeights = [1, 1, 1, 0, 1.41, 1.41]  // L R C LFE Ls Rs
+    case .passthrough:
+      // Stereo: the modes' side level goes through a 2x2 matrix.
+      guard let f = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) else {
+        throw NativePlayerError.outputDeviceFailed
+      }
+      playerFormat = f
+      roles = [.frontL, .frontR]
+      for mode in AudioEnhancementMode.allCases {
+        matrices[mode] = DownmixMatrix.stereoCoefficients(
+          sideGainDB: AudioEnhancementPreset.preset(for: mode).sideGainDB)
+      }
+    case .monoToStereo:
       guard let f = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) else {
         throw NativePlayerError.outputDeviceFailed
       }
@@ -1156,7 +1225,10 @@ public final class PlaybackController: @unchecked Sendable {
     enhancementLock.lock()
     downmixRoles = roles
     downmixMatrices = matrices
+    let limiterRequired = limiterHeld
     enhancementLock.unlock()
+    loudnessNormalizer = LoudnessNormalizer(sampleRate: sampleRate, weights: loudnessWeights)
+    loudnessLogFrames = 0
     audioFormat = playerFormat
     audioBytesPerFrame = Int(playerFormat.streamDescription.pointee.mBytesPerFrame)
 
@@ -1170,7 +1242,7 @@ public final class PlaybackController: @unchecked Sendable {
       enhancementChain = chain
       chain.install(player: player, mainMixer: engine.mainMixerNode, format: playerFormat)
       let mode = currentMode()
-      chain.apply(preset: AudioEnhancementPreset.preset(for: mode))
+      chain.apply(preset: AudioEnhancementPreset.preset(for: mode), limiterRequired: limiterRequired)
       // Task 11: fixed downstream latency. The master clock is the
       // player node (UPSTREAM of the chain), so this latency does not
       // move the clock — it only shifts the fixed output path. Logged
@@ -1793,6 +1865,7 @@ public final class PlaybackController: @unchecked Sendable {
     downmixRoles = nil
     downmixMatrices = [:]
     enhancementLock.unlock()
+    loudnessNormalizer = nil
     invalidateNodeClock()
     demuxer?.close()
     demuxer = nil
@@ -2008,6 +2081,21 @@ public final class PlaybackController: @unchecked Sendable {
           guard let dst = pcm.floatChannelData?[ch] else { continue }
           let src = min(ch, decodeChannels - 1)
           for i in 0..<n { dst[i] = interleaved[i * decodeChannels + src] }
+        }
+      }
+      // Loudness normalization (measures always; scales when enabled). Boost
+      // only when the chain's limiter follows; multichannel passthrough has
+      // no chain, so it can only be cut there.
+      if let normalizer = loudnessNormalizer {
+        normalizer.process(
+          pcm, frames: n, enabled: normalizationEnabled(),
+          maxBoostDB: enhancementChain != nil ? LoudnessNormalizer.maxBoostDB : 0)
+        loudnessLogFrames += n
+        if Double(loudnessLogFrames) >= 10 * playerFormatSampleRate() {
+          loudnessLogFrames = 0
+          NSLog(
+            "[Audio] loudness %.1f LUFS, normalization gain %+.1f dB",
+            normalizer.meter.integratedLoudness ?? -.infinity, normalizer.gainDB)
         }
       }
       // Land this content on the node's timeline before scheduling it: if the
