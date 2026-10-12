@@ -64,7 +64,7 @@ struct ContentView: View {
     }.fileImporter(
       isPresented: Binding(
         get: { uiState.showFileImporter }, set: { uiState.showFileImporter = $0 }),
-      allowedContentTypes: [.mkv], allowsMultipleSelection: false
+      allowedContentTypes: UTType.playableMovies, allowsMultipleSelection: false
     ) { result in
       if case .success(let urls) = result, let url = urls.first {
         Task { try? await player.open(url) }
@@ -157,7 +157,8 @@ struct ContentView: View {
   /// through the existing error alert instead.
   private func openDropped(_ url: URL) {
     guard NativeSomePlayer.isSupportedFile(url) else {
-      player.errorMessage = "\"\(url.lastPathComponent)\" is not a supported video file (MKV only)."
+      player.errorMessage =
+        "\"\(url.lastPathComponent)\" is not a supported video file (MKV, MP4 or MOV only)."
       return
     }
     Task { try? await player.open(url) }
@@ -186,7 +187,10 @@ struct ContentView: View {
 }
 
 extension UTType {
-  /// Matroska. Never falls back to `.movie`: that would let the importer pick
-  /// MP4/MOV files the engine (Matroska-only demuxer) cannot open.
+  /// Matroska.
   static var mkv: UTType { UTType(filenameExtension: "mkv", conformingTo: .movie) ?? .movie }
+  /// What the importer offers: the engine's Matroska and MP4/QuickTime
+  /// demuxers (M4V conforms to MPEG-4). Not `.movie`: that would offer AVI,
+  /// MPEG-TS and others the engine cannot open.
+  static var playableMovies: [UTType] { [.mkv, .mpeg4Movie, .quickTimeMovie] }
 }

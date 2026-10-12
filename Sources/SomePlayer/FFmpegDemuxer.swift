@@ -20,6 +20,10 @@ struct DemuxPacket {
   let duration: Int64
   let keyframe: Bool
   let data: Data
+  /// Decoded samples to drop from the start/end of this packet's output
+  /// (encoder priming from an MP4 edit list); handed back to the decoder.
+  var skipStart: Int32 = 0
+  var skipEnd: Int32 = 0
   /// The packet's stream time base (pts/dts/duration are in these units).
   /// Matroska defaults to 1/1000, but a non-default TimestampScale changes it,
   /// so it is carried per packet instead of assumed.
@@ -82,7 +86,7 @@ struct NativeTrackInfo {
   }
 }
 
-/// Swift wrapper over the MediaDemuxer C bridge (libavformat/matroska).
+/// Swift wrapper over the MediaDemuxer C bridge (libavformat: Matroska, MP4/MOV).
 /// Owns one opaque demuxer handle; not thread-safe — the PlaybackController
 /// serializes all access on its pipeline queue.
 final class FFmpegDemuxer {
@@ -176,7 +180,7 @@ final class FFmpegDemuxer {
     let streamID = Int(pkt.stream_id)
     return DemuxPacket(
       streamID: streamID, pts: pkt.pts, dts: pkt.dts, duration: pkt.duration,
-      keyframe: pkt.keyframe != 0, data: data,
+      keyframe: pkt.keyframe != 0, data: data, skipStart: pkt.skip_start, skipEnd: pkt.skip_end,
       timeBase: timeBases[streamID] ?? Rational(num: 1, den: 1000))
   }
 

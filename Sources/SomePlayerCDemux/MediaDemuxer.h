@@ -65,6 +65,11 @@ typedef struct MediaPacket {
     uint8_t *data;           /* malloc'd, caller-owned; free via media_packet_free() */
     size_t size;
     int keyframe;
+    /* Decoded samples to drop from the start/end of this packet's output
+       (FFmpeg skip-samples side data: MP4 edit-list encoder priming, e.g.
+       1024 for AAC). Pass them back to media_audio_decoder_send. */
+    int32_t skip_start;
+    int32_t skip_end;
 } MediaPacket;
 
 /* Result codes. */
@@ -87,7 +92,7 @@ int media_get_track_count(MediaDemuxer *d);
 int media_get_track(MediaDemuxer *d, int index, MediaTrack *out);
 
 /* Borrow `index` stream's codec extradata (e.g. the avcC record for H.264 in
-   MKV). On success *buf and *size are set; the pointer is owned by the
+   MKV or MP4). On success *buf and *size are set; the pointer is owned by the
    demuxer and stays valid until media_close(). Returns MEDIA_RESULT_OK/ERROR. */
 int media_get_track_extradata(MediaDemuxer *d, int index, const uint8_t **buf, size_t *size);
 
@@ -149,9 +154,10 @@ typedef struct MediaAudioFrame {
     char sample_fmt[16];  /* source sample format name, e.g. "fltp" */
 } MediaAudioFrame;
 
-/* Decode audio track `index` from the current demux position until
-   `max_samples` samples per channel are produced (or EOF/error). The demuxer
-   is advanced; call media_seek() first to rewind. Returns MEDIA_RESULT_OK and
+/* Decode audio track `index` (FFmpeg-decoded codecs only, not AAC) from the
+   current demux position until `max_samples` samples per channel are produced
+   (or EOF/error). The demuxer is advanced; call media_seek() first to rewind.
+   Returns MEDIA_RESULT_OK and
    fills *out (caller frees via media_audio_frame_free), MEDIA_RESULT_EOF if no
    frame could be decoded, or MEDIA_RESULT_ERROR. */
 int media_decode_audio(MediaDemuxer *d, int index, int max_samples,
@@ -169,7 +175,9 @@ const char *media_audio_frame_sample_fmt(const MediaAudioFrame *f);
 
 /* Opaque incremental decoder for one audio stream. Feed it packets from the
    shared demuxer (media_read_packet, filtered to the stream); it outputs PCM
-   frames. Owns its own AVCodecContext. Placeholder body keeps the type from
+   frames. Owns its own AVCodecContext, or for AAC an AudioToolbox converter
+   (the system decoder: no FFmpeg aac decoder is shipped, and it covers
+   HE-AAC v1/v2). Placeholder body keeps the type from
    being dropped by the Clang importer (see MediaDemuxer); suppressed by
    MEDIADEMUXER_IMPL so the .c can define the real struct. */
 typedef struct MediaAudioDecoder MediaAudioDecoder;
@@ -178,6 +186,13 @@ struct MediaAudioDecoder { int _placeholder; };
 #endif
 
 MediaAudioDecoder *media_audio_decoder_create(MediaDemuxer *d, int index);
+/* The PCM format the decoder outputs (a frame that differs is the caller's to
+   skip). Use this, not the track metadata, to set up playback: an HE-AAC
+   stream's container header can say 24 kHz mono while the decoder outputs
+   48 kHz stereo. mask is the FFmpeg native-order mask (0 if unknown), name its
+   describe string. Returns MEDIA_RESULT_OK/ERROR. */
+int media_audio_decoder_get_format(MediaAudioDecoder *dec, int *channels, int *sample_rate,
+                                   uint64_t *mask, char *name, size_t name_size);
 /* Send one packet (must belong to the decoder's stream). Returns
    MEDIA_RESULT_OK/ERROR. */
 int media_audio_decoder_send(MediaAudioDecoder *dec, MediaPacket *pkt);

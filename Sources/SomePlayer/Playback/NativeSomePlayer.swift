@@ -227,10 +227,11 @@ import SomePlayerCDemux
   /// current file's directory. `advanceTrack(direction: -1)`.
   public func previousTrack() { advanceTrack(direction: -1) }
 
-  /// File extensions the engine can open: the vendored FFmpeg build has only
-  /// the Matroska demuxer. Shared with the app (document types, file importer,
-  /// drag & drop) and used to pick siblings for the Next/Previous media keys.
-  public static let supportedFileExtensions: Set<String> = ["mkv"]
+  /// File extensions the engine can open: the vendored FFmpeg build has the
+  /// Matroska and MP4/QuickTime demuxers. Shared with the app (document types,
+  /// file importer, drag & drop) and used to pick siblings for the
+  /// Next/Previous media keys.
+  public static let supportedFileExtensions: Set<String> = ["mkv", "mp4", "m4v", "mov"]
 
   public static func isSupportedFile(_ url: URL) -> Bool {
     supportedFileExtensions.contains(url.pathExtension.lowercased())

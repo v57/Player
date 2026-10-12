@@ -14,14 +14,20 @@ minimal build.
 - h264-attachments.mkv  10.000000s  [h264,video ttf,attachment]  chapters=0
 - h264-chapters.mkv  30.000000s  [h264,video]  chapters=3
 - h264-corrupt.mkv  10.000000s  [h264,video]  chapters=0
+- h264-flac-then-ac3-51.mkv  8.006000s  [h264,video flac,audio,1 ac3,audio,6]  chapters=0
+- h264-flac.mkv  4.000000s  [h264,video flac,audio,1]  chapters=0
 - h264-long.mkv  120.000000s  [h264,video]  chapters=0
 - h264-multiaudio.mkv  10.007000s  [h264,video aac,audio,2 aac,audio,1]  chapters=0
 - h264-noduration.mkv  10.000000s  [h264,video]  chapters=0
 - h264-srt.mkv  10.000000s  [h264,video subrip,subtitle]  chapters=0
 - h264-truncated.mkv  10.000000s  [h264,video]  chapters=0
 - h264-videoonly.mkv  10.000000s  [h264,video]  chapters=0
+- h264-aac-51.mp4  10.000000s  [h264,video aac,audio,6]  chapters=0
+- h264-aac.mp4  10.000000s  [h264,video aac,audio,2]  chapters=0
+- h264-heaacv2.mp4  10.110667s  [h264,video aac,audio,2]  chapters=0
+- hevc-aac.mp4  10.000000s  [hevc,video aac,audio,2]  chapters=0
 
-## Real-file references (DTS/HEVC can't be encoded by ffmpeg)
+## Real-file references (DTS can't be encoded by ffmpeg)
 
 - video.mkv (repo): 7903.478 s, h264 1920x816 + 2x dts 6ch 48kHz +
   4x subrip, 32 chapters — the primary acceptance file.
@@ -29,7 +35,8 @@ minimal build.
 
 ## Notes
 
-- h264-aac / h264-multiaudio: AAC is unsupported by the native engine
-  initially (Phase 6 adds it) — expect graceful rejection, not crash.
+- AAC (MKV and MP4) decodes through AudioToolbox, not FFmpeg.
+- h264-flac / h264-flac-then-ac3-51: FLAC is not decodable — expect
+  graceful rejection / the AC3 track picked, not a crash.
 - truncated/corrupt: open + enumerate, decode fails mid-stream with
   libavformat "File ended prematurely" — expected robustness.

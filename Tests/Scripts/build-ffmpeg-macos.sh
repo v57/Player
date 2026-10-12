@@ -6,7 +6,7 @@
 #
 #   Pinned:  FFmpeg n7.1.5 @ 3a0867c2bfda4a4d4309ca1a8cbdc6175e67f587
 #   License: LGPL v2.1+ only — NO --enable-gpl (no GPL components).
-#   Output:  ThirdParty/FFmpeg/{include,lib} + LICENSE, COPYING.LGPLv2.1,
+#   Output:  Sources/FFmpeg/{include,lib} + LICENSE, COPYING.LGPLv2.1,
 #            source-version.txt, README.md, REPORT.md
 #   Deps:    git, make, clang, strip, install_name_tool, otool (Xcode CLT).
 #            NO Homebrew dependency: FFmpeg source is cloned from upstream.
@@ -27,7 +27,8 @@ FFMPEG_REPO="https://github.com/FFmpeg/FFmpeg.git"
 #---- paths ------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-PREFIX="${REPO_ROOT}/ThirdParty/FFmpeg"
+PREFIX="${REPO_ROOT}/Sources/FFmpeg"
+CORPUS="${REPO_ROOT}/Tests/Corpus"
 SCRATCH="${REPO_ROOT}/build/ffmpeg"
 SRC_DIR="${SCRATCH}/src"
 LIB_BUILD_DIR="${SCRATCH}/build-libs"
@@ -78,7 +79,9 @@ fi
 #---- configure flags (auditable; --disable-everything first, then re-enable)-
 # LGPL only (no --enable-gpl), shared only (--disable-static), arm64 only.
 # No h264 parser by design: AVCC extradata goes straight to VideoToolbox.
-# --enable-parser=dca added only if configure complains (locked rule).
+# No aac decoder by design: AAC decodes through AudioToolbox (the FFmpeg
+# decoder would add ~230 KB). --enable-parser=dca added only if configure
+# complains (locked rule).
 CONFIGURE_BASE=(
   --disable-everything
   --disable-programs
@@ -95,6 +98,7 @@ CONFIGURE_BASE=(
   --enable-avformat
   --enable-avutil
   --enable-demuxer=matroska
+  --enable-demuxer=mov
   --enable-decoder=dca
   --enable-decoder=ac3
   --enable-decoder=eac3
@@ -138,6 +142,10 @@ make -j"${JOBS}"
 echo "==> stage 4: install to ${PREFIX}"
 rm -rf "${PREFIX}"
 make install
+# Not shipped: FFmpeg's example sources. The pkg-config files get a
+# relocatable prefix instead of this checkout's absolute path.
+rm -rf "${PREFIX}/share"
+sed -i '' "s|${PREFIX}|\${pcfiledir}/../..|g" "${PREFIX}"/lib/pkgconfig/*.pc
 
 #---- stage 5: license + version + readme ------------------------------------
 echo "==> stage 5: license + version + readme"
@@ -153,10 +161,10 @@ Build date             : ${BUILD_DATE}
 EOF
 
 cat > "${PREFIX}/README.md" <<EOF
-# FFmpeg (minimal, LGPL) — ThirdParty/FFmpeg
+# FFmpeg (minimal, LGPL) — Sources/FFmpeg
 
-Minimal shared FFmpeg build for the Player macOS app (arm64): Matroska
-demuxing + DTS (dca), Dolby Digital (ac3) and E-AC3 (eac3) decoding.
+Minimal shared FFmpeg build for the Player macOS app (arm64): Matroska and
+MP4/MOV demuxing + DTS (dca), Dolby Digital (ac3) and E-AC3 (eac3) decoding.
 Pinned to FFmpeg ${FFMPEG_TAG}
 (${FFMPEG_COMMIT}). Reproduced by \`Tests/Scripts/build-ffmpeg-macos.sh\` — no
 Homebrew dependency (the script clones the pinned tag itself).
@@ -174,11 +182,13 @@ Homebrew dependency (the script clones the pinned tag itself).
     Tests/Scripts/build-ffmpeg-macos.sh [--clean]
 
 ## Enabled components
-\`demuxer=matroska\`, \`decoder=dca\`, \`decoder=ac3\`, \`decoder=eac3\`,
-\`parser=ac3\`, \`protocol=file\`; everything else
+\`demuxer=matroska\`, \`demuxer=mov\`, \`decoder=dca\`, \`decoder=ac3\`,
+\`decoder=eac3\`, \`parser=ac3\`, \`protocol=file\`; everything else
 disabled (\`--disable-everything\`). NO \`--enable-gpl\` → LGPL v2.1+ only.
 No h264 parser by design: H.264 (AVCC extradata) goes straight to
 VideoToolbox (\`CMVideoFormatDescriptionCreateFromH264ParameterSets\`).
+No aac decoder by design: AAC decodes through AudioToolbox (the FFmpeg aac
+decoder would add ~230 KB to libavcodec).
 
 ## Runtime linkage
 The dylibs carry \`@rpath/\` install names (e.g.
@@ -259,15 +269,29 @@ FFPROBE="${PROBE_BUILD_DIR}/ffprobe"
 # DYLD_LIBRARY_PATH makes dyld prefer the SHIPPED libs (searched before the
 # recorded install name and before @rpath) — the task's own sanity form.
 FFPROBE_RUN=(env DYLD_LIBRARY_PATH="${PREFIX}/lib" "${FFPROBE}")
-echo "---- ffprobe — stream codec names of video.mkv (demux proof, shipped libs)"
-"${FFPROBE_RUN[@]}" -v error -show_entries stream=codec_name -of csv=p=0 "${REPO_ROOT}/video.mkv" \
-  | tee "${LOG_DIR}/ffprobe-streams.txt"
+# The corpus (Tests/Scripts/build-robustness-corpus.sh) supplies one file per
+# container: Matroska with AC3 (FFmpeg decode) and MP4 with AAC (demux only:
+# AAC decodes through AudioToolbox in the app).
+SANITY_FILES=("${CORPUS}/h264-ac3-short.mkv" "${CORPUS}/h264-aac.mp4")
+for f in "${SANITY_FILES[@]}"; do
+  if [[ ! -f "${f}" ]]; then
+    echo "ERROR: ${f} missing — run Tests/Scripts/build-robustness-corpus.sh first" >&2
+    exit 1
+  fi
+done
+: > "${LOG_DIR}/ffprobe-streams.txt"
+for f in "${SANITY_FILES[@]}"; do
+  echo "---- ffprobe — stream codec names of ${f##*/} (demux proof, shipped libs)"
+  { echo "${f##*/}:"; "${FFPROBE_RUN[@]}" -v error -show_entries stream=codec_name -of csv=p=0 "${f}"; } \
+    | tee -a "${LOG_DIR}/ffprobe-streams.txt"
+done
 
 cat > "${SCRATCH}/sanity_demux_decode.c" <<'C_EOF'
 /*
  * sanity_demux_decode.c — prove the minimal FFmpeg build (shipped dylibs)
- * demuxes Matroska and decodes DTS from video.mkv. Linked against
- * ThirdParty/FFmpeg/lib with -rpath, mirroring the app's
+ * demuxes a file and decodes its first audio stream that has an FFmpeg
+ * decoder (none required: MP4 AAC is decoded by AudioToolbox). Linked
+ * against Sources/FFmpeg/lib with -rpath, mirroring the app's
  * @executable_path/../Frameworks run-path story.
  */
 #include <stdio.h>
@@ -275,7 +299,7 @@ cat > "${SCRATCH}/sanity_demux_decode.c" <<'C_EOF'
 #include <libavcodec/avcodec.h>
 
 int main(int argc, char **argv) {
-    if (argc < 2) { fprintf(stderr, "usage: %s <file.mkv>\n", argv[0]); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: %s <file>\n", argv[0]); return 2; }
 
     AVFormatContext *fmt = NULL;
     int ret = avformat_open_input(&fmt, argv[1], NULL, NULL);
@@ -284,51 +308,48 @@ int main(int argc, char **argv) {
     if (ret < 0) { fprintf(stderr, "FAIL avformat_find_stream_info: %d\n", ret); return 1; }
 
     printf("demuxer: %s, streams: %d\n", fmt->iformat->name, fmt->nb_streams);
-    int dts_index = -1;
+    int audio_index = -1;
     for (unsigned i = 0; i < fmt->nb_streams; i++) {
         AVStream *s = fmt->streams[i];
         const char *type = av_get_media_type_string(s->codecpar->codec_type);
         printf("  stream %u: %s %s\n", i, type ? type : "?",
                avcodec_get_name(s->codecpar->codec_id));
-        if (s->codecpar->codec_id == AV_CODEC_ID_DTS && dts_index < 0)
-            dts_index = (int)i;
+        if (s->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && audio_index < 0 &&
+            avcodec_find_decoder(s->codecpar->codec_id))
+            audio_index = (int)i;
     }
-    if (dts_index < 0) { fprintf(stderr, "FAIL: no DTS stream found\n"); return 1; }
+    if (audio_index < 0) {
+        avformat_close_input(&fmt);
+        printf("PASS: %s demux (no FFmpeg-decoded audio stream)\n", argv[1]);
+        return 0;
+    }
 
-    AVCodecParameters *par = fmt->streams[dts_index]->codecpar;
+    AVCodecParameters *par = fmt->streams[audio_index]->codecpar;
     const AVCodec *dec = avcodec_find_decoder(par->codec_id);
-    if (!dec) { fprintf(stderr, "FAIL: dca decoder not found\n"); return 1; }
     AVCodecContext *ctx = avcodec_alloc_context3(dec);
     if (avcodec_parameters_to_context(ctx, par) < 0) { fprintf(stderr, "FAIL: params->ctx\n"); return 1; }
-    if (avcodec_open2(ctx, dec, NULL) < 0) { fprintf(stderr, "FAIL: avcodec_open2 (dca)\n"); return 1; }
+    if (avcodec_open2(ctx, dec, NULL) < 0) { fprintf(stderr, "FAIL: avcodec_open2 (%s)\n", dec->name); return 1; }
 
     AVPacket *pkt = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
     int decoded = 0;
-    while (av_read_frame(fmt, pkt) >= 0) {
-        if (pkt->stream_index == dts_index) {
-            if (avcodec_send_packet(ctx, pkt) >= 0) {
-                while (avcodec_receive_frame(ctx, frame) >= 0) {
-                    printf("DTS decoded: %d samples, %d ch, %d Hz, fmt %s\n",
-                           frame->nb_samples,
-                           frame->ch_layout.nb_channels,
-                           frame->sample_rate,
-                           av_get_sample_fmt_name(frame->format));
-                    decoded = 1;
-                    break;
-                }
-            }
-            if (decoded) break;
+    while (!decoded && av_read_frame(fmt, pkt) >= 0) {
+        if (pkt->stream_index == audio_index && avcodec_send_packet(ctx, pkt) >= 0 &&
+            avcodec_receive_frame(ctx, frame) >= 0) {
+            printf("%s decoded: %d samples, %d ch, %d Hz, fmt %s\n", dec->name,
+                   frame->nb_samples, frame->ch_layout.nb_channels, frame->sample_rate,
+                   av_get_sample_fmt_name(frame->format));
+            decoded = 1;
         }
         av_packet_unref(pkt);
     }
-    if (!decoded) { fprintf(stderr, "FAIL: no DTS frame decoded\n"); return 1; }
+    if (!decoded) { fprintf(stderr, "FAIL: no %s frame decoded\n", dec->name); return 1; }
 
     av_frame_free(&frame);
     av_packet_free(&pkt);
     avcodec_free_context(&ctx);
     avformat_close_input(&fmt);
-    printf("PASS: matroska demux + dca decode against shipped libs\n");
+    printf("PASS: %s demux + %s decode against shipped libs\n", argv[1], dec->name);
     return 0;
 }
 C_EOF
@@ -338,7 +359,10 @@ clang -O2 -I "${PREFIX}/include" "${SCRATCH}/sanity_demux_decode.c" \
   -L "${PREFIX}/lib" -lavformat -lavcodec -lavutil \
   -Xlinker -rpath -Xlinker "${PREFIX}/lib" \
   -o "${SCRATCH}/sanity_demux_decode"
-"${SCRATCH}/sanity_demux_decode" "${REPO_ROOT}/video.mkv" | tee "${LOG_DIR}/ctest.txt"
+: > "${LOG_DIR}/ctest.txt"
+for f in "${SANITY_FILES[@]}"; do
+  "${SCRATCH}/sanity_demux_decode" "${f}" | sed "s|${REPO_ROOT}/||" | tee -a "${LOG_DIR}/ctest.txt"
+done
 
 #---- stage 10: REPORT.md ------------------------------------------------------
 echo "==> stage 10: REPORT.md"
@@ -400,11 +424,11 @@ protocols="$(grep -E '^#define CONFIG_.*_PROTOCOL 1$' "${CFG}" | sed 's/^#define
   echo "App resolves them via \`LD_RUNPATH_SEARCH_PATHS = @executable_path/../Frameworks\`."
   echo
   echo "## Sanity check (shipped libs)"
-  echo "### ffprobe — stream codec names of \`video.mkv\` (demux proof)"
+  echo "### ffprobe — stream codec names of the corpus files (demux proof)"
   echo '```'
   cat "${LOG_DIR}/ffprobe-streams.txt"
   echo '```'
-  echo "### C demux+decode test (matroska demux + dca decode proof)"
+  echo "### C demux+decode test (matroska + mov demux, ac3 decode proof)"
   echo '```'
   cat "${LOG_DIR}/ctest.txt"
   echo '```'

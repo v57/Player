@@ -117,7 +117,7 @@ final class PlaybackIntegrationTests: XCTestCase {
   /// An undecodable first audio track no longer rejects the file; the
   /// decodable one plays and the undecodable one cannot be selected.
   func testUndecodableFirstAudioTrackIsSkipped() async throws {
-    let url = try media("h264-aac-then-ac3-51.mkv")
+    let url = try media("h264-flac-then-ac3-51.mkv")
     let player = NativeSomePlayer()
     try await player.open(url)
     XCTAssertNil(player.errorMessage)
@@ -132,12 +132,47 @@ final class PlaybackIntegrationTests: XCTestCase {
   /// A file whose only audio cannot be decoded fails with an error even when
   /// it was just written (it used to sit on "Waiting" forever).
   func testFreshUnsupportedFileFailsInsteadOfWaiting() async throws {
-    let url = try media("h264-aac.mkv")
+    let url = try media("h264-flac.mkv")
     try FileManager.default.setAttributes([.modificationDate: Date.now], ofItemAtPath: url.path)
     let player = NativeSomePlayer()
     try await player.open(url)
     XCTAssertEqual(player.state, .failed)
     XCTAssertFalse(player.isWaitingForFileUpdate)
-    XCTAssertEqual(player.errorMessage, "Unsupported audio codec: aac")
+    XCTAssertEqual(player.errorMessage, "Unsupported audio codec: flac")
+  }
+
+  /// MP4 with H.264 or HEVC video and AAC audio opens, plays and seeks.
+  func testMP4PlaysAndSeeks() async throws {
+    for name in ["h264-aac.mp4", "hevc-aac.mp4"] {
+      let url = try media(name)
+      let player = NativeSomePlayer()
+      try await player.open(url)
+      XCTAssertNil(player.errorMessage, name)
+      XCTAssertEqual(player.audioTrackID, 1, name)
+      XCTAssertEqual(player.duration, 10, accuracy: 0.1, name)
+      try await waitUntil(5, "\(name) playing") { player.state == .playing }
+      try await waitUntil(5, "\(name) advancing") { player.position >= 1.0 }
+      player.seek(to: 6.0, exact: true)
+      try await waitUntil(5, "\(name) past the seek") { player.position >= 6.5 }
+      XCTAssertNil(player.errorMessage, name)
+      player.stop()
+    }
+  }
+
+  /// AAC in Matroska decodes too: the AAC track (first) is picked and both it
+  /// and the AC3 track are selectable.
+  func testMatroskaAACPlaysAndSwitchesToAC3() async throws {
+    let url = try media("h264-aac-then-ac3-51.mkv")
+    let player = NativeSomePlayer()
+    try await player.open(url)
+    XCTAssertNil(player.errorMessage)
+    XCTAssertEqual(player.audioTrackID, 1)
+    XCTAssertEqual(player.audioTracks.map(\.isPlayable), [true, true])
+    try await waitUntil(5, "playing") { player.state == .playing }
+    player.selectAudioTrack(2)
+    try await Task.sleep(nanoseconds: 300_000_000)
+    XCTAssertEqual(player.audioTrackID, 2)
+    XCTAssertNil(player.errorMessage)
+    player.stop()
   }
 }
