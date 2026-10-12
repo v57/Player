@@ -18,7 +18,23 @@ import SwiftUI
   /// the engine module was renamed `SomePlayer` so `import SomePlayer` here
   /// is Apple's framework (see Player/NowPlayingController.swift).
   /// App-lifetime: created once here.
-  private let nowPlaying: NowPlayingController
+  ///
+  /// nil when `PLAYER_NO_MEDIA_KEYS=1`: a headless playback run must not claim
+  /// the machine's Now Playing slot. Registering the remote commands / info
+  /// makes THIS app the media-key target, so the user's own music skipping or
+  /// pausing would drive the player under test instead (and vice versa) —
+  /// neither side's log would be trustworthy. With the controller skipped the
+  /// app never becomes the Now Playing app and the keys keep going to Music.
+  private let nowPlaying: NowPlayingController?
+
+  /// Test-harness window/app trace + optional minimize (PLAYER_TRACE_WINDOW).
+  private let trace: TestTrace
+
+  /// Input shield: consumes every keyboard/mouse event delivered to this app
+  /// (PLAYER_IGNORE_INPUT=1) so the machine's user cannot drive the run. Must be
+  /// created AFTER `trace` — local monitors run in registration order, so the
+  /// trace gets to record the attempt before the event is swallowed.
+  private let inputShield: InputShield
 
   init() {
     let box = SomePlayerBox(engine: NativeSomePlayer())
@@ -41,8 +57,19 @@ import SwiftUI
     }
     _player = StateObject(wrappedValue: box)
     _uiState = StateObject(wrappedValue: PlayerUIState(player: box))
+    // Trace first, then the input shield, so a blocked event is still logged.
+    let trace = TestTrace()
+    let shield = InputShield()
+    trace.shield = shield
+    self.trace = trace
+    self.inputShield = shield
     // Wire the media keys / Now Playing integration. Weak-holds the box.
-    nowPlaying = NowPlayingController(player: box)
+    if ProcessInfo.processInfo.environment["PLAYER_NO_MEDIA_KEYS"] == "1" {
+      nowPlaying = nil
+      NSLog("[App] media keys / Now Playing DISABLED (PLAYER_NO_MEDIA_KEYS=1)")
+    } else {
+      nowPlaying = NowPlayingController(player: box)
+    }
   }
 
   var body: some Scene {

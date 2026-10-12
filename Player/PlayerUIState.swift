@@ -83,6 +83,11 @@ import SomePlayer
   private func handleTransportKey(_ event: NSEvent) -> NSEvent? {
     guard let player, player.fileName != nil else { return event }
     if event.isARepeat { return event }  // parity with the view
+    // A headless run's transport must not move because someone typed at the
+    // machine. The InputShield (PLAYER_IGNORE_INPUT=1) swallows every event
+    // before this monitor should ever see one; consuming here too makes that
+    // independent of monitor registration order.
+    if InputShield.isEnabled { return nil }
     let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
     let hasCmd = mods.contains(.command)
     let hasCtrl = mods.contains(.control)
