@@ -1,5 +1,5 @@
 import Foundation
-import SomePlayer
+import PlayerKit
 
 /// Persists the user's audio mode and loudness-normalization choice.
 ///

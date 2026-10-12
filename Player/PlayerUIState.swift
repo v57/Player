@@ -1,7 +1,7 @@
 import AppKit
 import Combine
 import Foundation
-import SomePlayer
+import PlayerKit
 
 /// Pure UI state that doesn't belong on the playback protocol. Owned by the
 /// App and injected alongside the player box, so both ContentView and the

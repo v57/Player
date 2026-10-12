@@ -1,7 +1,7 @@
 import AVFoundation
 import XCTest
 
-@testable import SomePlayer
+@testable import PlayerKit
 
 final class LoudnessMeterTests: XCTestCase {
   /// Planar stereo sine, `seconds` long, the same on both channels.

@@ -1,5 +1,5 @@
-import AppUpdater
-import SomePlayer
+import UpdateKit
+import PlayerKit
 import SwiftUI
 
 @main struct PlayerApp: App {
@@ -16,7 +16,7 @@ import SwiftUI
   /// Routes the Play/Next/Previous media keys to the player and registers
   /// it as the macOS Now Playing app (so the keys stop falling through to
   /// Music). Pure Swift using MPRemoteCommandCenter + MPNowPlayingInfoCenter —
-  /// the engine module was renamed `SomePlayer` so `import SomePlayer` here
+  /// the engine module is `PlayerKit`, so `import MediaPlayer` here
   /// is Apple's framework (see Player/NowPlayingController.swift).
   /// App-lifetime: created once here.
   ///

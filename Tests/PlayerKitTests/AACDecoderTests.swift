@@ -1,7 +1,7 @@
-import SomePlayerCDemux
+import PlayerCDemux
 import XCTest
 
-@testable import SomePlayer
+@testable import PlayerKit
 
 /// The C bridge's AudioToolbox AAC decoder against the generated MP4 corpus
 /// (a 440 Hz tone from t = 0). Skipped unless the corpus exists:

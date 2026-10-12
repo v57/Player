@@ -1,4 +1,4 @@
-import SomePlayer
+import PlayerKit
 import SwiftUI
 
 /// "Audio" and "Subtitles" menus in the app menu bar, listing the current

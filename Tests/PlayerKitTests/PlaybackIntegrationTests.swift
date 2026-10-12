@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import SomePlayer
+@testable import PlayerKit
 
 /// End-to-end transport tests against the real engine (demux, VideoToolbox,
 /// AVAudioEngine) using the generated corpus. Skipped unless the corpus exists:

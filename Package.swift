@@ -8,10 +8,10 @@ import PackageDescription
 let ffmpegLibDir = Context.packageDirectory + "/Sources/FFmpeg/lib"
 
 let package = Package(
-  name: "SomePlayer", platforms: [.macOS(.v12)],
+  name: "Player", platforms: [.macOS(.v12)],
   products: [
     // Products define the executables and libraries a package produces, making them visible to other packages.
-    .library(name: "SomePlayer", targets: ["SomePlayer"])
+    .library(name: "PlayerKit", targets: ["PlayerKit"])
   ],
   targets: [
     // C bridge over FFmpeg (libavformat/libavcodec/libavutil). SwiftPM
@@ -19,7 +19,7 @@ let package = Package(
     // MediaDemuxer shim and links the vendored FFmpeg dylibs (headers +
     // libs under Sources/FFmpeg, package-relative) and AudioToolbox (AAC).
     .target(
-      name: "SomePlayerCDemux", publicHeadersPath: ".",
+      name: "PlayerCDemux", publicHeadersPath: ".",
       cSettings: [.headerSearchPath("../FFmpeg/include")],
       linkerSettings: [
         .linkedLibrary("avformat"), .linkedLibrary("avcodec"), .linkedLibrary("avutil"),
@@ -29,10 +29,10 @@ let package = Package(
     // The media engine: demux wrapper, decode, playback, persistence
     // seam, and the SomePlayerView SwiftUI surface.
     .target(
-      name: "SomePlayer", dependencies: ["SomePlayerCDemux"],
+      name: "PlayerKit", dependencies: ["PlayerCDemux"],
       swiftSettings: [.enableUpcomingFeature("ApproachableConcurrency")], ),
     .testTarget(
-      name: "SomePlayerTests", dependencies: ["SomePlayer"], path: "Tests/SomePlayerTests",
+      name: "PlayerKitTests", dependencies: ["PlayerKit"], path: "Tests/PlayerKitTests",
       linkerSettings: [
         // The library's FFmpeg dylibs carry @rpath install names; the
         // test bundle must resolve that rpath to the vendored lib dir

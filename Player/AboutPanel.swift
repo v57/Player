@@ -1,5 +1,5 @@
 import AppKit
-import SomePlayer
+import PlayerKit
 
 /// The standard About panel with credits: Player's MIT license and the FFmpeg
 /// LGPL notice (FFmpeg's legal checklist asks for it in the about box). The

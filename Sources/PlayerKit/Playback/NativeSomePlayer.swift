@@ -1,7 +1,7 @@
 import AppKit
 import Combine
 import Foundation
-import SomePlayerCDemux
+import PlayerCDemux
 
 /// The native engine behind the SomePlayer protocol: libavformat demux +
 /// VideoToolbox + libavcodec dca + AVAudioEngine + Metal (via VideoFrameSink).

@@ -1,5 +1,5 @@
 import XCTest
-@testable import SomePlayer
+@testable import PlayerKit
 
 /// Regression test for HEVC files that carry VPS/SPS/PPS IN-BAND (a bare
 /// 23-byte hvcC header with numOfArrays == 0 in CodecPrivate) instead of in
@@ -12,9 +12,9 @@ import XCTest
 /// it. Skipped when the file isn't present so the suite stays portable.
 final class HEVCInBandParameterSetTests: XCTestCase {
   func testOpenInBandHEVCMkvNoLongerThrows() async throws {
-    // Resolve the repo root (this file lives in Tests/SomePlayerTests/).
+    // Resolve the repo root (this file lives in Tests/PlayerKitTests/).
     let fileURL = URL(fileURLWithPath: #filePath)
-      .deletingLastPathComponent()  // Tests/SomePlayerTests
+      .deletingLastPathComponent()  // Tests/PlayerKitTests
       .deletingLastPathComponent()  // Tests
       .deletingLastPathComponent()  // repo root
       .appendingPathComponent("video.mkv")

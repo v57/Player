@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import SomePlayer
+@testable import PlayerKit
 
 /// The shipped dylibs must match the license notice (About window, README):
 /// the pinned release, LGPL v2.1+ only, and no GPL or nonfree components.

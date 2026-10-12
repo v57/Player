@@ -3,7 +3,7 @@ import Accelerate
 import CoreMedia
 import CoreVideo
 import Foundation
-import SomePlayerCDemux
+import PlayerCDemux
 import VideoToolbox
 
 /// One decoded video frame ready for presentation.

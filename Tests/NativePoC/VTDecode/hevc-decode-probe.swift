@@ -10,10 +10,10 @@
 // N video packets from a mid-file position and reports every decode status.
 //
 // Build (app's shipped minimal FFmpeg dylibs):
-//   clang -c ../../../Sources/SomePlayerCDemux/MediaDemuxer.c -I ../../../Sources/FFmpeg/include -o /tmp/MediaDemuxer.o
+//   clang -c ../../../Sources/PlayerCDemux/MediaDemuxer.c -I ../../../Sources/FFmpeg/include -o /tmp/MediaDemuxer.o
 //   xcrun swiftc hevc-decode-probe.swift /tmp/MediaDemuxer.o -I ../../../Sources/FFmpeg/include \
 //       -L ../../../Sources/FFmpeg/lib -lavformat -lavcodec -lavutil \
-//       -import-objc-header ../../../Sources/SomePlayerCDemux/MediaDemuxer.h -o /tmp/hevc-decode-probe
+//       -import-objc-header ../../../Sources/PlayerCDemux/MediaDemuxer.h -o /tmp/hevc-decode-probe
 //   DYLD_LIBRARY_PATH=../../../Sources/FFmpeg/lib /tmp/hevc-decode-probe
 
 import CoreMedia
