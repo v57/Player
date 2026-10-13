@@ -38,8 +38,8 @@ import SwiftUI
   private let inputShield: InputShield
 
   /// Updates from GitHub Releases (Player.zip, built by
-  /// Tests/Scripts/release-macos.sh): checked daily, installed in place with
-  /// a relaunch. App-lifetime.
+  /// Tests/Scripts/release-macos.sh): checked daily once the user turns
+  /// on automatic checks (never before), installed in place with a relaunch. App-lifetime.
   private let updater = AppUpdater(github: "v57/Player", assetName: "Player.zip")
 
   init() {
