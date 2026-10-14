@@ -19,6 +19,11 @@ import SwiftData
   /// app.
   private static let modelContainer: ModelContainer = {
     let schema = Schema([PlaybackRecord.self, TrackPick.self])
+    // The screenshot demo never touches the user's resume points.
+    if ScreenshotDemo.isOn {
+      let memory = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+      return try! ModelContainer(for: schema, configurations: [memory])
+    }
     // Explicit per-app store: a SwiftData app that omits a URL lands on
     // default.store in whatever Application Support resolves to — for an
     // UNSANDBOXED build that is the SHARED ~/Library/Application Support/

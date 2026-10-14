@@ -82,7 +82,9 @@ import SwiftUI
 
   var body: some Scene {
     WindowGroup {
-      ContentView().environmentObject(player).environmentObject(uiState).frame(
+      ContentView().environmentObject(player).environmentObject(uiState)
+      .task { await ScreenshotDemo.apply(to: player, ui: uiState) }
+      .frame(
         minWidth: 800, minHeight: 500
       )
       // Single-window app. By default WindowGroup opens a NEW

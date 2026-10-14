@@ -1,0 +1,23 @@
+{
+  "build": { "scheme": "Player", "project": "Player.xcodeproj" },
+  "appearances": ["dark"],
+  "variables": { "DEMO": "/tmp/PlayerDemo" },
+  "watch": ["Player", "Sources", "Tools/screenshots"],
+  "mac": { "window": [1440, 900] },
+  "scenes": [
+    {
+      "id": "01-playing",
+      "arguments": ["--screenshot-demo", "--open", "$DEMO/Northern Lights.mp4", "--seek", "24", "--pause"],
+      "environment": { "PLAYER_MUTE": "1", "PLAYER_NO_MEDIA_KEYS": "1" },
+      "delay": 3,
+      "caption": "Plays everything, beautifully"
+    },
+    {
+      "id": "02-empty",
+      "arguments": ["--screenshot-demo"],
+      "environment": { "PLAYER_MUTE": "1", "PLAYER_NO_MEDIA_KEYS": "1" },
+      "delay": 2,
+      "caption": "Drop a video to start"
+    }
+  ]
+}
