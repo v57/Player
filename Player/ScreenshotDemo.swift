@@ -1,3 +1,4 @@
+import DevScreenshots
 import Foundation
 import PlayerKit
 
@@ -9,6 +10,9 @@ import PlayerKit
 ///   --open <file>            opens a video
 ///   --seek <seconds>         then seeks there
 ///   --pause                  then pauses, so the picture holds still with the controls up
+///
+/// `dev-screenshots` takes every scene in one launch: the first comes from the launch arguments, each later one
+/// arrives through DevScreenshots' scene handler with the same options, and opens in place.
 enum ScreenshotDemo {
   static let isOn: Bool = {
     #if DEBUG
@@ -18,23 +22,44 @@ enum ScreenshotDemo {
     #endif
   }()
 
-  static func value(_ option: String) -> String? {
-    let arguments = CommandLine.arguments
-    guard let index = arguments.firstIndex(of: option), index + 1 < arguments.count else { return nil }
-    return arguments[index + 1]
+  /// Called once the window is up: opens the launch's scene, then each later one in this launch.
+  @MainActor static func start(player: SomePlayerBox, ui: PlayerUIState) async {
+    Screenshots.prepare(waitsForReady: true) { scene in
+      await open(scene.arguments, in: player, ui: ui)
+    }
+    await open(CommandLine.arguments, in: player, ui: ui)
+    Screenshots.ready()
   }
 
-  @MainActor static func apply(to player: SomePlayerBox, ui: PlayerUIState) async {
-    guard isOn, let path = value("--open") else { return }
-    try? await player.open(URL(fileURLWithPath: path))
-    if let seconds = value("--seek").flatMap(Double.init) {
-      try? await Task.sleep(for: .milliseconds(500))
-      player.seek(to: seconds, exact: true)
+  /// One scene, from its arguments. What the scene before opened is closed first, and its resume point forgotten,
+  /// so a scene without `--open` shows the empty window with no recent videos.
+  @MainActor static func open(_ arguments: [String], in player: SomePlayerBox, ui: PlayerUIState) async {
+    guard isOn else { return }
+    func value(_ option: String) -> String? {
+      guard let index = arguments.firstIndex(of: option), index + 1 < arguments.count else { return nil }
+      return arguments[index + 1]
     }
-    if CommandLine.arguments.contains("--pause") {
-      try? await Task.sleep(for: .milliseconds(800))
+    if player.fileName != nil { player.stop() }
+    PlaybackStore.shared.forgetDemoHistory()
+    guard let path = value("--open") else { return }
+    // Each step waits for the engine, so the scene is on screen when this returns: no settling delay needed.
+    try? await player.open(URL(fileURLWithPath: path))
+    await waitUntil { player.isPlaying }
+    if let seconds = value("--seek").flatMap(Double.init) {
+      player.seek(to: seconds, exact: true)
+      // The clock passes the target once the seek's first frames are showing.
+      await waitUntil { player.position >= seconds && player.position < seconds + 2 }
+    }
+    if arguments.contains("--pause") {
       player.pause()
+      await waitUntil { player.state == .paused }
     }
     ui.showControls()
+  }
+
+  /// Polls the engine's state until `condition` holds, for at most `timeout` seconds.
+  @MainActor private static func waitUntil(timeout: Double = 10, _ condition: () -> Bool) async {
+    let deadline = Date.now.addingTimeInterval(timeout)
+    while !condition(), Date.now < deadline { try? await Task.sleep(for: .milliseconds(50)) }
   }
 }

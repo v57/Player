@@ -13,7 +13,8 @@ struct ContentView: View {
   @State private var isDropTargeted = false
   var body: some View {
     ZStack {
-      videoSurface
+      // Hidden while nothing is open: after a stop the Metal layer keeps the last frame it drew.
+      videoSurface.opacity(player.fileName == nil ? 0 : 1)
       if player.fileName == nil { emptyState }
     }.frame(maxWidth: .infinity, maxHeight: .infinity)
       // Whole-window drop target: files dragged onto the window open

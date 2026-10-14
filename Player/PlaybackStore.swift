@@ -152,6 +152,15 @@ import SwiftData
     try? modelContext.save()
   }
 
+  /// The screenshot demo's in-memory store: forgets every resume point and track pick between scenes. Does nothing
+  /// outside the demo, so it can never touch the user's history.
+  func forgetDemoHistory() {
+    guard ScreenshotDemo.isOn else { return }
+    try? modelContext.delete(model: PlaybackRecord.self)
+    try? modelContext.delete(model: TrackPick.self)
+    try? modelContext.save()
+  }
+
   // MARK: - Track picks
 
   /// Saves a manual pick so the same choice carries to the next video.

@@ -83,7 +83,7 @@ import SwiftUI
   var body: some Scene {
     WindowGroup {
       ContentView().environmentObject(player).environmentObject(uiState)
-      .task { await ScreenshotDemo.apply(to: player, ui: uiState) }
+      .task { await ScreenshotDemo.start(player: player, ui: uiState) }
       .frame(
         minWidth: 800, minHeight: 500
       )
