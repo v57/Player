@@ -43,8 +43,8 @@ swift test
 xcodebuild -project Player.xcodeproj -scheme Player -destination 'platform=macOS' build
 ```
 
-The checkout folder must be named `Player`, with [UpdateKit](https://github.com/v57/UpdateKit) cloned
-beside it: the Xcode project finds its packages at `../Player` and `../UpdateKit`.
+[UpdateKit](https://github.com/v57/UpdateKit) comes from GitHub's `main` branch. To work on both, clone it next to
+this repository and open `Player-Local.xcworkspace` instead of the project.
 `Tests/Scripts/release-macos.sh` builds the signed and notarized `Player.zip` for a release.
 
 ## License

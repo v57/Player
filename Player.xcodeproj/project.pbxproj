@@ -114,8 +114,8 @@
 			mainGroup = 000000000000000000000001;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				267577ED3037555800FB9989 /* XCLocalSwiftPackageReference "../Player" */,
-				A9D0C0DE0000000000000001 /* XCLocalSwiftPackageReference "../UpdateKit" */,
+				267577ED3037555800FB9989 /* XCLocalSwiftPackageReference "." */,
+				A9D0C0DE0000000000000001 /* XCRemoteSwiftPackageReference "UpdateKit" */,
 			);
 			preferredProjectObjectVersion = 90;
 			productRefGroup = 000000000000000000000020 /* Products */;
@@ -431,15 +431,22 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		267577ED3037555800FB9989 /* XCLocalSwiftPackageReference "../Player" */ = {
+		267577ED3037555800FB9989 /* XCLocalSwiftPackageReference "." */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Player;
-		};
-		A9D0C0DE0000000000000001 /* XCLocalSwiftPackageReference "../UpdateKit" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../UpdateKit;
+			relativePath = .;
 		};
 /* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A9D0C0DE0000000000000001 /* XCRemoteSwiftPackageReference "UpdateKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/v57/UpdateKit.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		267577EE3037555800FB9989 /* PlayerKit */ = {
