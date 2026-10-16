@@ -3,7 +3,8 @@ import PlayerKit
 import SwiftUI
 
 /// The timeline on the video's bottom edge: elapsed time, the scrubber, total time. No scrim and no outline: the times
-/// and the slider each cast one soft shadow, so they read on any frame without darkening the picture. Always dark.
+/// cast one soft shadow and the slider is the kit's on-video style, so they read on any frame without darkening the
+/// picture. Always dark.
 struct TimelineBar: View {
   @ObservedObject var player: SomePlayerBox
 
@@ -37,7 +38,7 @@ struct TimelineBar: View {
           isScrubbing = false
         }
       }
-      .shadow(color: .black.opacity(0.55), radius: 2, y: 1)
+      .kitSliderStyle(.overlay)
       .disabled(player.duration <= 0)
 
       time(player.duration).frame(width: 50, alignment: .leading)

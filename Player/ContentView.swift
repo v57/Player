@@ -39,11 +39,11 @@ struct ContentView: View {
       .animation(.kit, value: player.isPlaying).animation(.kitFast, value: isDropTargeted)
       .navigationTitle(player.fileName ?? "Player")
       .toolbar {
-        // The open video's rich title replaces the window's own (from macOS 26, where the title can lose its glass).
-        if #available(macOS 26, *), let name = player.fileName {
-          ToolbarItem(placement: .navigation) {
+        // The open video's rich title replaces the window's own.
+        if let name = player.fileName {
+          KitToolbarItem(placement: .navigation) {
             KitTitle(name, meta: videoMeta, systemImage: "film", hue: .indigo).padding(.leading, 6)
-          }.sharedBackgroundVisibility(.hidden)
+          }
         }
       }
       .hidingWindowTitle(player.fileName != nil)
@@ -118,7 +118,7 @@ struct ContentView: View {
               SidebarRow(
                 URL(fileURLWithPath: record.filePath).lastPathComponent, subtitle: Self.recentLine(record),
                 systemImage: "film", hue: .indigo
-              ).simultaneousGesture(TapGesture().onEnded { openRecent(record) })
+              ).action { openRecent(record) }
             }
           }.frame(maxWidth: 440).padding(KitMetrics.gutter).frame(maxWidth: .infinity)
         }
@@ -217,10 +217,11 @@ struct ContentView: View {
 }
 
 extension View {
-  /// Hides the window's own title while the toolbar shows the rich one (macOS 26, like the rich title).
+  /// Hides the window's own title while the toolbar shows the rich one, as `kitHidesSystemTitle()` does (macOS 15
+  /// on), but only while a video is open.
   @ViewBuilder fileprivate func hidingWindowTitle(_ hides: Bool) -> some View {
-    if #available(macOS 26, *) {
-      toolbar(removing: hides ? .title : nil)
+    if hides {
+      kitHidesSystemTitle()
     } else {
       self
     }
