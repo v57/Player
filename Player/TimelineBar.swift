@@ -1,7 +1,9 @@
+import ComponentKit
 import PlayerKit
 import SwiftUI
 
-/// Bottom timeline: elapsed / total time plus a scrubbing slider.
+/// The timeline on the video's bottom edge: elapsed time, the scrubber, total time. No scrim and no outline: the times
+/// and the slider each cast one soft shadow, so they read on any frame without darkening the picture. Always dark.
 struct TimelineBar: View {
   @ObservedObject var player: SomePlayerBox
 
@@ -13,10 +15,10 @@ struct TimelineBar: View {
 
   var body: some View {
     HStack(spacing: 10) {
-      Text(MediaTime(seconds: player.position).displayString).monospacedDigit().font(.caption)
-        .foregroundStyle(.secondary).frame(width: 50, alignment: .trailing)
+      time(player.position).frame(width: 50, alignment: .trailing)
 
-      Slider(
+      KitSlider(
+        "Timeline",
         value: Binding(
           get: { isScrubbing ? scrubValue : player.position },
           set: { newValue in
@@ -24,7 +26,7 @@ struct TimelineBar: View {
             // Live preview while dragging; plain (keyframe) seeks
             // are cheap enough for every tick.
             if isScrubbing { player.seek(to: newValue) }
-          }), in: 0...max(player.duration, 0.001)
+          }), in: 0...max(player.duration, 0.001), format: { MediaTime(seconds: $0).displayString }
       ) { editing in
         if editing {
           isScrubbing = true
@@ -34,10 +36,24 @@ struct TimelineBar: View {
           player.seek(to: scrubValue, exact: true)
           isScrubbing = false
         }
-      }.tint(.red.opacity(0.5)).disabled(player.duration <= 0).accessibilityLabel("Timeline")
+      }
+      .shadow(color: .black.opacity(0.55), radius: 2, y: 1)
+      .disabled(player.duration <= 0)
 
-      Text(MediaTime(seconds: player.duration).displayString).monospacedDigit().font(.caption)
-        .foregroundStyle(.secondary).frame(width: 50, alignment: .leading)
-    }.colorScheme(.dark).padding(.horizontal, 16).padding(.bottom, 8)
+      time(player.duration).frame(width: 50, alignment: .leading)
+    }
+    .environment(\.colorScheme, .dark)
+    .padding(.horizontal, 16)
+    .padding(.bottom, 12)
+  }
+
+  /// A time in bold white with one soft shadow (bold, so the halo has enough ink around it to read on white).
+  private func time(_ seconds: Double) -> some View {
+    Text(MediaTime(seconds: seconds).displayString)
+      .kitFont(.callout)
+      .fontWeight(.bold)
+      .monospacedDigit()
+      .foregroundStyle(Color.white)
+      .shadow(color: .black.opacity(0.9), radius: 2, y: 1)
   }
 }

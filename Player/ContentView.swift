@@ -1,4 +1,5 @@
 import Combine
+import ComponentKit
 import Foundation
 import PlayerKit
 import SwiftUI
@@ -25,19 +26,28 @@ struct ContentView: View {
         return true
       }.overlay(alignment: .bottom) {
         if player.fileName != nil, uiState.controlsVisible {
-          TimelineBar(player: player).transition(.blurReplace)
+          TimelineBar(player: player).transition(.opacity)
         }
       }.overlay(alignment: .topLeading) {
         // Playback hit the end of a still-downloading file; the engine is
         // waiting for it to grow and will retry. Shown while that wait is
         // active, in the top-leading corner above the video.
         if player.isWaitingForFileUpdate { waitingBadge }
-      }.overlay { if isDropTargeted { dropTargetOverlay } }.onHover { uiState.hovering = $0 }
-      .animation(.easeInOut(duration: 0.2), value: uiState.hovering).animation(
-        .easeInOut(duration: 0.2), value: uiState.controlsHidden
-      ).animation(.easeInOut(duration: 0.2), value: player.isPlaying).animation(
-        .easeInOut(duration: 0.15), value: isDropTargeted
-      ).navigationTitle(player.fileName ?? "Player").onReceive(
+      }.kitDropTarget(isDropTargeted, cornerRadius: KitMetrics.radiusWindow)
+      .overlay { if isDropTargeted { dropTargetLabel } }.onHover { uiState.hovering = $0 }
+      .animation(.kit, value: uiState.hovering).animation(.kit, value: uiState.controlsHidden)
+      .animation(.kit, value: player.isPlaying).animation(.kitFast, value: isDropTargeted)
+      .navigationTitle(player.fileName ?? "Player")
+      .toolbar {
+        // The open video's rich title replaces the window's own (from macOS 26, where the title can lose its glass).
+        if #available(macOS 26, *), let name = player.fileName {
+          ToolbarItem(placement: .navigation) {
+            KitTitle(name, meta: videoMeta, systemImage: "film", hue: .indigo).padding(.leading, 6)
+          }.sharedBackgroundVisibility(.hidden)
+        }
+      }
+      .hidingWindowTitle(player.fileName != nil)
+      .onReceive(
         NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)
       ) { note in
         guard let window = note.object as? NSWindow else { return }
@@ -81,37 +91,56 @@ struct ContentView: View {
   /// PlayerUIState (NSCursor.setHiddenUntilMouseMoves from the window
   /// event monitor) — the view itself does no cursor management.
   private var videoSurface: some View { SomePlayerView(player: player) }
+  /// No video open: what to do, the Open button, and the videos played last.
   private var emptyState: some View {
     let recent = recentVideos
-    return VStack(spacing: 16) {
-      GeometryReader { view in
+    return VStack(spacing: 0) {
+      EmptyState(
+        systemImage: "play.rectangle", title: "No Video Open",
+        message: "Open an MKV, MP4 or MOV file, or drop one on this window. Videos you play show up here."
+      ) {
+        Button {
+          uiState.showFileImporter = true
+        } label: {
+          HStack(spacing: 4) {
+            Label("Open", systemImage: "folder")
+            Text("⌘O").opacity(0.8)
+          }
+        }.buttonStyle(.kitPrimary)
+      }.frame(maxHeight: recent.isEmpty ? .infinity : 280)
+      if !recent.isEmpty {
         ScrollView {
-          VStack(alignment: .leading, spacing: 16) {
+          KitSection(
+            "Recent", meta: recent.count == 1 ? "1 video" : "\(recent.count) videos", systemImage: "clock",
+            hue: .gray
+          ) {
             ForEach(recent) { record in
-              Button {
-                openRecent(record)
-              } label: {
-                VStack(alignment: .leading) {
-                  Text(URL(fileURLWithPath: record.filePath).lastPathComponent).truncationMode(
-                    .middle)
-                  let duration: Range<Date> =
-                    Date(timeIntervalSince1970: 0)..<Date(timeIntervalSince1970: record.duration)
-                  HStack {
-                    Text(duration, format: .timeDuration).frame(minWidth: 48, alignment: .leading)
-                    Text(record.lastPlayedAt, format: .relative(presentation: .named))
-                  }.foregroundStyle(.secondary).font(.caption)
-                }
-              }.buttonStyle(.plain)
+              SidebarRow(
+                URL(fileURLWithPath: record.filePath).lastPathComponent, subtitle: Self.recentLine(record),
+                systemImage: "film", hue: .indigo
+              ).simultaneousGesture(TapGesture().onEnded { openRecent(record) })
             }
-          }.lineLimit(1).padding(.horizontal, 16).frame(
-            minWidth: 400, maxWidth: .infinity, minHeight: view.size.height)
+          }.frame(maxWidth: 440).padding(KitMetrics.gutter).frame(maxWidth: .infinity)
         }
-      }.safeAreaInset(edge: .bottom) {
-        Button("Open", systemImage: "folder.fill") { uiState.showFileImporter = true }.padding(
-          .bottom)
       }
-    }.frame(maxWidth: .infinity, maxHeight: .infinity)
+    }.frame(maxWidth: .infinity, maxHeight: .infinity).kitPane()
   }
+
+  /// "12:48 · 2 days ago".
+  private static func recentLine(_ record: PlaybackRecord) -> String {
+    let duration = Duration.seconds(record.duration).formatted(.time(pattern: .minuteSecond))
+    let played = record.lastPlayedAt.formatted(.relative(presentation: .named))
+    return "\(duration) · \(played)"
+  }
+
+  /// The title's meta line: the video codec and the length ("H264 · 1:00").
+  private var videoMeta: [String] {
+    var parts: [String] = []
+    if let codec = player.videoTracks.first?.codec { parts.append(codec.uppercased()) }
+    if player.duration > 0 { parts.append(MediaTime(seconds: player.duration).displayString) }
+    return parts
+  }
+
   /// The 5 most recently played files that still exist on disk, newest
   /// first. Re-fetched on each render, so the list reflects the latest
   /// additions the moment the empty state appears.
@@ -165,25 +194,36 @@ struct ContentView: View {
     Task { try? await player.open(url) }
   }
 
-  /// Red "Waiting" capsule shown in the top-leading corner while the engine
+  /// The "Waiting" chip shown in the top-leading corner while the engine
   /// waits for a still-downloading file to update.
   private var waitingBadge: some View {
-    Text("Waiting")
-      .padding(.horizontal, 12).padding(.vertical, 4).background(.red, in: .capsule).padding()
+    Chip("Waiting", systemImage: "arrow.down", hue: .orange).environment(\.colorScheme, .dark)
+      .padding(KitMetrics.gutter * 2)
   }
 
-  /// Full-window drop highlight, shown while a file drag hovers over the
-  /// window: dim, accent stroke, and a centered label.
-  private var dropTargetOverlay: some View {
-    ZStack {
-      Color.black.opacity(0.35)
-      RoundedRectangle(cornerRadius: 12).stroke(Color.accentColor, lineWidth: 2).padding(12)
-      Label("Drop to Play", systemImage: "play.circle.fill").font(.title2).padding(.horizontal, 24)
-        .padding(.vertical, 12).background(.regularMaterial, in: Capsule())
-    }.allowsHitTesting(false).transition(.opacity)
+  /// The label in the middle of the window while a file drag hovers over it (the window wears the kit's drop ring).
+  private var dropTargetLabel: some View {
+    Label("Drop to Play", systemImage: "play.fill")
+      .kitFont(.headline)
+      .padding(.horizontal, 14)
+      .padding(.vertical, 10)
+      .kitSurface(.floating, cornerRadius: KitMetrics.radiusCard)
+      .allowsHitTesting(false)
+      .transition(.opacity)
   }
   private var errorBinding: Binding<Bool> {
     Binding(get: { player.errorMessage != nil }, set: { if !$0 { player.errorMessage = nil } })
+  }
+}
+
+extension View {
+  /// Hides the window's own title while the toolbar shows the rich one (macOS 26, like the rich title).
+  @ViewBuilder fileprivate func hidingWindowTitle(_ hides: Bool) -> some View {
+    if #available(macOS 26, *) {
+      toolbar(removing: hides ? .title : nil)
+    } else {
+      self
+    }
   }
 }
 

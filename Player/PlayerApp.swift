@@ -1,6 +1,7 @@
-import UpdateKit
+import ComponentKit
 import PlayerKit
 import SwiftUI
+import UpdateKit
 
 @main struct PlayerApp: App {
   /// Quit the app when its last window closes (standard macOS behavior).
@@ -41,6 +42,9 @@ import SwiftUI
   /// Tests/Scripts/release-macos.sh): checked daily once the user turns
   /// on automatic checks (never before), installed in place with a relaunch. App-lifetime.
   private let updater = AppUpdater(github: "v57/Player", assetName: "Player.zip")
+
+  /// Player's red, the one colour the app picks.
+  static let accent = Color(red: 1, green: 0x3b / 255, blue: 0x30 / 255)
 
   init() {
     let box = SomePlayerBox(engine: NativeSomePlayer())
@@ -83,6 +87,7 @@ import SwiftUI
   var body: some Scene {
     WindowGroup {
       ContentView().environmentObject(player).environmentObject(uiState)
+      .componentKit(accent: Self.accent)
       .task { await ScreenshotDemo.start(player: player, ui: uiState) }
       .frame(
         minWidth: 800, minHeight: 500
