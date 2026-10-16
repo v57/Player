@@ -46,7 +46,7 @@ struct ContentView: View {
           }
         }
       }
-      .hidingWindowTitle(player.fileName != nil)
+      .kitHidesSystemTitle(player.fileName != nil)
       .onReceive(
         NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)
       ) { note in
@@ -213,18 +213,6 @@ struct ContentView: View {
   }
   private var errorBinding: Binding<Bool> {
     Binding(get: { player.errorMessage != nil }, set: { if !$0 { player.errorMessage = nil } })
-  }
-}
-
-extension View {
-  /// Hides the window's own title while the toolbar shows the rich one, as `kitHidesSystemTitle()` does (macOS 15
-  /// on), but only while a video is open.
-  @ViewBuilder fileprivate func hidingWindowTitle(_ hides: Bool) -> some View {
-    if hides {
-      kitHidesSystemTitle()
-    } else {
-      self
-    }
   }
 }
 
