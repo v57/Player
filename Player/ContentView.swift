@@ -36,7 +36,8 @@ struct ContentView: View {
       }.kitDropTarget(isDropTargeted, cornerRadius: KitMetrics.radiusWindow)
       .overlay { if isDropTargeted { dropTargetLabel } }.onHover { uiState.hovering = $0 }
       .animation(.kit, value: uiState.hovering).animation(.kit, value: uiState.controlsHidden)
-      .animation(.kit, value: player.isPlaying).animation(.kitFast, value: isDropTargeted)
+      .animation(.kit, value: player.isPlaying).animation(.kit, value: player.isWaitingForFileUpdate)
+      .animation(.kitFast, value: isDropTargeted)
       .navigationTitle(player.fileName ?? "Player")
       .toolbar {
         // The open video's rich title replaces the window's own.
@@ -194,11 +195,20 @@ struct ContentView: View {
     Task { try? await player.open(url) }
   }
 
-  /// The "Waiting" chip shown in the top-leading corner while the engine
-  /// waits for a still-downloading file to update.
+  /// Shown in the top-leading corner while the engine waits for a still-downloading file to grow: the wait lives in
+  /// the live icon's work indicator.
   private var waitingBadge: some View {
-    Chip("Waiting", systemImage: "arrow.down", hue: .orange).environment(\.colorScheme, .dark)
-      .padding(KitMetrics.gutter * 2)
+    HStack(spacing: 8) {
+      LiveIcon(systemImage: "arrow.down", hue: .orange, status: .working(), size: 20)
+      Text("Waiting for the download").kitFont(.callout)
+    }
+    .padding(.leading, 6)
+    .padding(.trailing, 12)
+    .padding(.vertical, 6)
+    .kitSurface(.floating, cornerRadius: KitMetrics.radiusCard)
+    .environment(\.colorScheme, .dark)
+    .padding(KitMetrics.gutter * 2)
+    .transition(.opacity)
   }
 
   /// The label in the middle of the window while a file drag hovers over it (the window wears the kit's drop ring).
