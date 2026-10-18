@@ -55,10 +55,14 @@ echo "==> Player ${VERSION} (team ${TEAM_ID})"
 
 echo "==> archive"
 # arm64 only: the vendored FFmpeg dylibs are arm64 (the generic destination
-# would otherwise also build x86_64 and fail to link them).
+# would otherwise also build x86_64 and fail to link them). LTO and ld-archive-prelink
+# drop unused package code (Xcode's per-package `ld -r` would keep it).
 xcodebuild -project "${SRC}/Player.xcodeproj" -scheme Player -configuration Release \
   -destination 'generic/platform=macOS' -archivePath "${OUT}/Player.xcarchive" \
-  -derivedDataPath "${OUT}/DerivedData" ARCHS=arm64 archive -quiet
+  -derivedDataPath "${OUT}/DerivedData" ARCHS=arm64 \
+  SWIFT_LTO=YES ALTERNATE_LINKER_PATH="${SCRIPT_DIR}/ld-archive-prelink" \
+  'OTHER_SWIFT_FLAGS=$(inherited) -Xfrontend -internalize-at-link -Xfrontend -conditional-runtime-records' \
+  archive -quiet
 
 echo "==> export (Developer ID)"
 cat > "${OUT}/ExportOptions.plist" <<EOF
