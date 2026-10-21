@@ -12,6 +12,7 @@ struct PlayerCommands: Commands {
     CommandGroup(replacing: .appInfo) { Button("About Player") { AboutPanel.show() } }
     CommandGroup(before: .newItem) {
       Button("Open…") { uiState.showFileImporter = true }.keyboardShortcut("o", modifiers: .command)
+      Button("Open from Device…") { uiState.showHubLibrary = true }.keyboardShortcut("o", modifiers: [.command, .shift])
     }
     CommandMenu("Playback") {
       // No keyboard shortcut on Play/Pause: a bare-Space menu key

@@ -81,6 +81,8 @@ struct ContentView: View {
       if case .success(let urls) = result, let url = urls.first {
         Task { try? await player.open(url) }
       }
+    }.sheet(isPresented: Binding(get: { uiState.showHubLibrary }, set: { uiState.showHubLibrary = $0 })) {
+      HubLibrarySheet().environmentObject(player).componentKit(accent: PlayerApp.accent)
     }.alert("Player Error", isPresented: errorBinding) {
       Button("OK", role: .cancel) {}
     } message: {
@@ -108,6 +110,7 @@ struct ContentView: View {
             Text("⌘O").opacity(0.8)
           }
         }.buttonStyle(.kitPrimary)
+        Button("Open from Device…") { uiState.showHubLibrary = true }.buttonStyle(.kit)
       }.frame(maxHeight: recent.isEmpty ? .infinity : 280)
       if !recent.isEmpty {
         ScrollView {

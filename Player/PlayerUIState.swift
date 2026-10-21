@@ -17,6 +17,8 @@ import PlayerKit
 @MainActor final class PlayerUIState: ObservableObject {
   /// Drives the file importer sheet; also triggered by File > Open….
   @Published var showFileImporter = false
+  /// Open from Device: a video on one of the user's Hub devices.
+  @Published var showHubLibrary = false
 
   /// True while the pointer is over the video area; reveals the controls
   /// overlay during playback.

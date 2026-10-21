@@ -11,6 +11,8 @@
 		A9D0C0DE0000000000000003 /* UpdateKit in Frameworks */ = {isa = PBXBuildFile; productRef = A9D0C0DE0000000000000002 /* UpdateKit */; };
 		D3E5C0DE0000000000000003 /* DevScreenshots in Frameworks */ = {isa = PBXBuildFile; productRef = D3E5C0DE0000000000000002 /* DevScreenshots */; };
 		C0C0C0DE0000000000000003 /* ComponentKit in Frameworks */ = {isa = PBXBuildFile; productRef = C0C0C0DE0000000000000002 /* ComponentKit */; };
+		7A70DE000000000000000003 /* VaultKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7A70DE000000000000000002 /* VaultKit */; };
+		7A70DE000000000000000006 /* SSHTunnel in Frameworks */ = {isa = PBXBuildFile; productRef = 7A70DE000000000000000005 /* SSHTunnel */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -46,6 +48,8 @@
 				A9D0C0DE0000000000000003 /* UpdateKit in Frameworks */,
 				D3E5C0DE0000000000000003 /* DevScreenshots in Frameworks */,
 				C0C0C0DE0000000000000003 /* ComponentKit in Frameworks */,
+				7A70DE000000000000000003 /* VaultKit in Frameworks */,
+				7A70DE000000000000000006 /* SSHTunnel in Frameworks */,
 			);
 		};
 /* End PBXFrameworksBuildPhase section */
@@ -90,6 +94,8 @@
 				A9D0C0DE0000000000000002 /* UpdateKit */,
 				D3E5C0DE0000000000000002 /* DevScreenshots */,
 				C0C0C0DE0000000000000002 /* ComponentKit */,
+				7A70DE000000000000000002 /* VaultKit */,
+				7A70DE000000000000000005 /* SSHTunnel */,
 			);
 			productName = MyApp;
 			productReference = 000000000000000000000120 /* Player.app */;
@@ -124,6 +130,8 @@
 				A9D0C0DE0000000000000001 /* XCRemoteSwiftPackageReference "UpdateKit" */,
 				D3E5C0DE0000000000000001 /* XCRemoteSwiftPackageReference "Dev" */,
 				C0C0C0DE0000000000000001 /* XCRemoteSwiftPackageReference "Component" */,
+				7A70DE000000000000000001 /* XCRemoteSwiftPackageReference "Vault" */,
+				7A70DE000000000000000004 /* XCRemoteSwiftPackageReference "Database" */,
 			);
 			preferredProjectObjectVersion = 90;
 			productRefGroup = 000000000000000000000020 /* Products */;
@@ -472,6 +480,22 @@
 				kind = branch;
 			};
 		};
+		7A70DE000000000000000001 /* XCRemoteSwiftPackageReference "Vault" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/v57/Vault.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+		7A70DE000000000000000004 /* XCRemoteSwiftPackageReference "Database" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/v57/Database.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -490,6 +514,16 @@
 		C0C0C0DE0000000000000002 /* ComponentKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = ComponentKit;
+		};
+		7A70DE000000000000000002 /* VaultKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7A70DE000000000000000001 /* XCRemoteSwiftPackageReference "Vault" */;
+			productName = VaultKit;
+		};
+		7A70DE000000000000000005 /* SSHTunnel */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7A70DE000000000000000004 /* XCRemoteSwiftPackageReference "Database" */;
+			productName = SSHTunnel;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
