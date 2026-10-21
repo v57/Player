@@ -95,15 +95,42 @@ final class FFmpegDemuxer {
   var handle: UnsafeMutablePointer<MediaDemuxer>?
   /// Per-stream time bases, cached at open so every packet carries its own.
   private var timeBases: [Int: Rational] = [:]
+  /// The position over a registered source, kept alive while the handle reads through it.
+  private var reader: MediaSourceReader?
 
   init() {}
 
   deinit { close() }
 
-  /// Opens and probes the file. Throws DemuxError.cannotOpen on failure.
+  /// Opens and probes the file, or the source registered for the URL (`MediaSources`). Throws
+  /// DemuxError.cannotOpen on failure.
   func open(_ url: URL) throws {
     close()
-    guard let h = url.path.withCString({ media_open($0) }) else { throw DemuxError.cannotOpen }
+    let h: UnsafeMutablePointer<MediaDemuxer>?
+    if let source = MediaSources.source(for: url) {
+      let reader = MediaSourceReader(source: source)
+      self.reader = reader
+      let opaque = Unmanaged.passUnretained(reader).toOpaque()
+      h = url.lastPathComponent.withCString { name in
+        media_open_io(
+          opaque,
+          { opaque, buffer, size in
+            guard let opaque, let buffer else { return -1 }
+            return Unmanaged<MediaSourceReader>.fromOpaque(opaque).takeUnretainedValue()
+              .read(into: buffer, count: Int(size))
+          },
+          { opaque, offset, whence in
+            guard let opaque else { return -1 }
+            return Unmanaged<MediaSourceReader>.fromOpaque(opaque).takeUnretainedValue().seek(to: offset, whence: whence)
+          }, name)
+      }
+    } else {
+      h = url.path.withCString { media_open($0) }
+    }
+    guard let h else {
+      reader = nil
+      throw DemuxError.cannotOpen
+    }
     handle = h
     for i in 0..<trackCount {
       if let t = track(at: i) { timeBases[i] = t.timeBase }
@@ -115,6 +142,7 @@ final class FFmpegDemuxer {
       media_close(h)
       handle = nil
     }
+    reader = nil
     timeBases = [:]
   }
 

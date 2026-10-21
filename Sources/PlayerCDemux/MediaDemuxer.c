@@ -22,11 +22,14 @@
 #include <libavutil/dict.h>
 #include <libavutil/intreadwrite.h>
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 
 struct MediaDemuxer {
     AVFormatContext *fmt_ctx;
+    /* Set by media_open_io: the custom reader, freed with its buffer at close. */
+    AVIOContext *io;
 };
 
 /* AudioToolbox's description of an AAC stream (streaming decoder section). */
@@ -42,6 +45,65 @@ MediaDemuxer *media_open(const char *path) {
     /* NULL fmt: let libavformat probe/demux by content. On failure
        avformat_open_input frees and NULLs *fmt_ctx, so media_close() is safe. */
     if (avformat_open_input(&d->fmt_ctx, path, NULL, NULL) < 0) {
+        media_close(d);
+        return NULL;
+    }
+    if (avformat_find_stream_info(d->fmt_ctx, NULL) < 0) {
+        media_close(d);
+        return NULL;
+    }
+    return d;
+}
+
+struct media_io {
+    void *opaque;
+    media_io_read read;
+    media_io_seek seek;
+};
+
+static int media_io_read_packet(void *opaque, uint8_t *buf, int size) {
+    struct media_io *io = (struct media_io *)opaque;
+    int n = io->read(io->opaque, buf, size);
+    if (n == 0) return AVERROR_EOF;
+    return n < 0 ? AVERROR(EIO) : n;
+}
+
+static int64_t media_io_seek_to(void *opaque, int64_t offset, int whence) {
+    struct media_io *io = (struct media_io *)opaque;
+    if (whence & AVSEEK_SIZE) return io->seek(io->opaque, 0, MEDIA_IO_SIZE);
+    return io->seek(io->opaque, offset, whence & ~AVSEEK_FORCE);
+}
+
+MediaDemuxer *media_open_io(void *opaque, media_io_read read, media_io_seek seek, const char *name) {
+    if (!read || !seek) return NULL;
+    MediaDemuxer *d = (MediaDemuxer *)calloc(1, sizeof(*d));
+    struct media_io *io = (struct media_io *)calloc(1, sizeof(*io));
+    const int buffer_size = 256 * 1024;
+    uint8_t *buffer = (uint8_t *)av_malloc(buffer_size);
+    if (!d || !io || !buffer) {
+        free(d);
+        free(io);
+        av_free(buffer);
+        return NULL;
+    }
+    io->opaque = opaque;
+    io->read = read;
+    io->seek = seek;
+    d->io = avio_alloc_context(buffer, buffer_size, 0, io, media_io_read_packet, NULL, media_io_seek_to);
+    if (!d->io) {
+        av_free(buffer);
+        free(io);
+        free(d);
+        return NULL;
+    }
+    d->fmt_ctx = avformat_alloc_context();
+    if (!d->fmt_ctx) {
+        media_close(d);
+        return NULL;
+    }
+    d->fmt_ctx->pb = d->io;
+    d->fmt_ctx->flags |= AVFMT_FLAG_CUSTOM_IO;
+    if (avformat_open_input(&d->fmt_ctx, name ? name : "", NULL, NULL) < 0) {
         media_close(d);
         return NULL;
     }
@@ -195,6 +257,11 @@ int media_seek(MediaDemuxer *d, double seconds) {
 void media_close(MediaDemuxer *d) {
     if (!d) return;
     if (d->fmt_ctx) avformat_close_input(&d->fmt_ctx);
+    if (d->io) {
+        free(d->io->opaque);
+        av_freep(&d->io->buffer);
+        avio_context_free(&d->io);
+    }
     free(d);
 }
 

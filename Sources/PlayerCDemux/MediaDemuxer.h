@@ -82,6 +82,17 @@ enum {
 /* Open a media file. Returns NULL on failure. */
 MediaDemuxer *media_open(const char *path);
 
+/* Reads up to `size` bytes at the current position into `buf`: the count read, 0 at the end, < 0 on failure. */
+typedef int (*media_io_read)(void *opaque, uint8_t *buf, int size);
+/* Moves the position (whence: SEEK_SET, SEEK_CUR, SEEK_END) and returns it, or the total size when whence is
+   MEDIA_IO_SIZE; < 0 when it can't. */
+typedef int64_t (*media_io_seek)(void *opaque, int64_t offset, int whence);
+#define MEDIA_IO_SIZE 0x10000
+
+/* Open media read through callbacks (a file on another device, read in ranges). `name` is for probing by
+   extension only. `opaque` must outlive the handle. Returns NULL on failure. */
+MediaDemuxer *media_open_io(void *opaque, media_io_read read, media_io_seek seek, const char *name);
+
 /* Container duration in milliseconds, or -1 if unknown. */
 int64_t media_get_duration(MediaDemuxer *d);
 
