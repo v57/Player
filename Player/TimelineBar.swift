@@ -2,9 +2,9 @@ import ComponentKit
 import PlayerKit
 import SwiftUI
 
-/// The timeline on the video's bottom edge: elapsed time, the scrubber, total time. No scrim and no outline: the times
-/// cast one soft shadow and the slider is the kit's on-video style, so they read on any frame without darkening the
-/// picture. Always dark.
+/// The timeline on the video's bottom edge: elapsed time, the scrubber, total time. No scrim: the times wear a tight
+/// dark edge and a soft halo, and the slider is the kit's on-video style, so they read on any frame without darkening
+/// the picture. Always dark.
 struct TimelineBar: View {
   @ObservedObject var player: SomePlayerBox
 
@@ -40,6 +40,8 @@ struct TimelineBar: View {
       }
       .kitSliderStyle(.overlay)
       .disabled(player.duration <= 0)
+      // Clears the knob, which overhangs the track's ends, from the times at the start and the end.
+      .padding(.horizontal, 6)
 
       time(player.duration).frame(width: 50, alignment: .leading)
     }
@@ -48,13 +50,19 @@ struct TimelineBar: View {
     .padding(.bottom, 12)
   }
 
-  /// A time in bold white with one soft shadow (bold, so the halo has enough ink around it to read on white).
+  /// A time in semibold white (wide enough glyphs to hold an edge) with a tight dark edge, three 1pt blurs stacked to
+  /// darken it, then a soft spread: on a white frame the edge is what reads.
   private func time(_ seconds: Double) -> some View {
     Text(MediaTime(seconds: seconds).displayString)
       .kitFont(.callout)
-      .fontWeight(.bold)
+      .fontWeight(.semibold)
       .monospacedDigit()
       .foregroundStyle(Color.white)
-      .shadow(color: .black.opacity(0.9), radius: 2, y: 1)
+      .shadow(color: .black, radius: 0.5)
+      .shadow(color: .black, radius: 0.5)
+      .shadow(color: .black, radius: 0.5)
+      .shadow(color: .black.opacity(0.7), radius: 1)
+      .shadow(color: .black.opacity(0.45), radius: 2)
+      .shadow(color: .black.opacity(0.35), radius: 4, y: 1)
   }
 }
