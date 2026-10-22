@@ -10,10 +10,14 @@ import PlayerKit
 ///   --open <file>            opens a video
 ///   --seek <seconds>         then seeks there
 ///   --pause                  then pauses, so the picture holds still with the controls up
+///   --hub-library <page>     shows Open from Device on demo devices: `devices` (with a failed connection) or `folder`
 ///
 /// `dev-screenshots` takes every scene in one launch: the first comes from the launch arguments, each later one
 /// arrives through DevScreenshots' scene handler with the same options, and opens in place.
 enum ScreenshotDemo {
+  /// The Open from Device page the scene shows (`--hub-library`): the sheet's library fills itself with demo devices.
+  @MainActor static var hubLibraryPage: String?
+
   static let isOn: Bool = {
     #if DEBUG
       CommandLine.arguments.contains("--screenshot-demo")
@@ -41,6 +45,14 @@ enum ScreenshotDemo {
     }
     if player.fileName != nil { player.stop() }
     PlaybackStore.shared.forgetDemoHistory()
+    ui.showHubLibrary = false
+    hubLibraryPage = value("--hub-library")
+    if hubLibraryPage != nil {
+      // A frame for the sheet to close in before it opens on the new page.
+      try? await Task.sleep(for: .milliseconds(300))
+      ui.showHubLibrary = true
+      return
+    }
     guard let path = value("--open") else { return }
     // Each step waits for the engine, so the scene is on screen when this returns: no settling delay needed.
     try? await player.open(URL(fileURLWithPath: path))

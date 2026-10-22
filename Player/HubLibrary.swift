@@ -22,13 +22,22 @@ import VaultKit
   private var clients: [String: SFTPClient] = [:]
   /// The stream playing now, unregistered when another opens.
   private var playing: URL?
+  /// The screenshots' devices, in place of the vault's (`--hub-library`).
+  private var demoHosts: [VaultHost]?
+
+  init() {
+    if let page = ScreenshotDemo.hubLibraryPage { showDemo(page) }
+  }
 
   /// The devices to offer, by name.
   var hosts: [VaultHost] {
-    Vault.shared.hubHosts.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+    (demoHosts ?? Vault.shared.hubHosts)
+      .sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
   }
 
-  func host(id: String) -> VaultHost? { Vault.shared.host(id: id) }
+  func host(id: String) -> VaultHost? {
+    demoHosts.map { $0.first { $0.id == id } } ?? Vault.shared.host(id: id)
+  }
 
   /// Shows a folder on a device: its home folder when `path` is nil. Lists folders and the videos Player plays.
   func browse(hostID: String, path: String? = nil) async {
@@ -80,6 +89,27 @@ import VaultKit
       self.error = error.localizedDescription
       return nil
     }
+  }
+
+  /// The screenshots' page: two devices that aren't there (`devices`, with the failed connection), or a folder of
+  /// videos on one of them (`folder`). Nothing connects.
+  private func showDemo(_ page: String) {
+    let nas = VaultHost(id: "demo-nas", name: "home-nas", hostname: "10.57.0.3", user: "maya")
+    demoHosts = [VaultHost(id: "demo-pc", name: "gaming-pc", hostname: "10.57.0.4"), nas]
+    guard page == "folder" else {
+      error = "Timed out connecting to 10.57.0.4 on port 22."
+      return
+    }
+    let folder = "/home/maya/Movies"
+    func file(_ name: String, _ gigabytes: Double) -> SFTPFileInfo {
+      SFTPFileInfo(path: "\(folder)/\(name)", kind: .file, size: UInt64(gigabytes * 1e9))
+    }
+    entries = [
+      SFTPFileInfo(path: "\(folder)/Concerts", kind: .directory), SFTPFileInfo(path: "\(folder)/Family", kind: .directory),
+      file("Lisbon Trip 2026.mp4", 1.42), file("Northern Lights 4K.mkv", 2.1), file("Sintel (2010).mkv", 1.12),
+      file("Tears of Steel.mov", 3.6),
+    ]
+    place = Place(hostID: nas.id, path: folder)
   }
 
   /// One SFTP login per device, kept while it works.
