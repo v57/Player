@@ -10,4 +10,8 @@ ffmpeg -loglevel error -y \
   -f lavfi -i "sine=frequency=220:duration=60:sample_rate=48000,volume=0.05" \
   -c:v libx264 -pix_fmt yuv420p -crf 20 -c:a aac -b:a 96k -shortest \
   -metadata title="Northern Lights" "$demo/Northern Lights.mp4"
+# The welcome's recent videos (--recents): the same picture under other names and containers.
+ffmpeg -loglevel error -y -i "$demo/Northern Lights.mp4" -c copy "$demo/Lisbon Trip 2026.mp4"
+ffmpeg -loglevel error -y -i "$demo/Northern Lights.mp4" -c copy "$demo/Sintel (2010).mkv"
+ffmpeg -loglevel error -y -i "$demo/Northern Lights.mp4" -c copy "$demo/Tears of Steel.mov"
 echo "$demo/Northern Lights.mp4"

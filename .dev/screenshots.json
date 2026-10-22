@@ -13,19 +13,19 @@
     },
     {
       "id": "02-empty",
-      "arguments": ["--screenshot-demo"],
+      "arguments": ["--screenshot-demo", "--recents", "$DEMO"],
       "environment": { "PLAYER_MUTE": "1", "PLAYER_NO_MEDIA_KEYS": "1" },
       "caption": "Drop a video to start"
     },
     {
       "id": "03-devices",
-      "arguments": ["--screenshot-demo", "--hub-library", "devices"],
+      "arguments": ["--screenshot-demo", "--recents", "$DEMO", "--hub-library", "devices"],
       "environment": { "PLAYER_MUTE": "1", "PLAYER_NO_MEDIA_KEYS": "1" },
       "caption": "Videos on your other devices"
     },
     {
       "id": "04-device-folder",
-      "arguments": ["--screenshot-demo", "--hub-library", "folder"],
+      "arguments": ["--screenshot-demo", "--recents", "$DEMO", "--hub-library", "folder"],
       "environment": { "PLAYER_MUTE": "1", "PLAYER_NO_MEDIA_KEYS": "1" },
       "caption": "Played as they're read"
     }

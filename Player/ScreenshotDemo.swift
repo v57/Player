@@ -10,6 +10,7 @@ import PlayerKit
 ///   --open <file>            opens a video
 ///   --seek <seconds>         then seeks there
 ///   --pause                  then pauses, so the picture holds still with the controls up
+///   --recents <folder>       lists the folder's videos as played over the last days (the welcome's recent videos)
 ///   --hub-library <page>     shows Open from Device on demo devices: `devices` (with a failed connection) or `folder`
 ///
 /// `dev-screenshots` takes every scene in one launch: the first comes from the launch arguments, each later one
@@ -46,6 +47,7 @@ enum ScreenshotDemo {
     if player.fileName != nil { player.stop() }
     PlaybackStore.shared.forgetDemoHistory()
     ui.showHubLibrary = false
+    if let folder = value("--recents") { PlaybackStore.shared.seedDemoHistory(folder: URL(fileURLWithPath: folder)) }
     hubLibraryPage = value("--hub-library")
     if hubLibraryPage != nil {
       // A frame for the sheet to close in before it opens on the new page.

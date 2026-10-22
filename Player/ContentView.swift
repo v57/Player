@@ -92,47 +92,37 @@ struct ContentView: View {
   /// PlayerUIState (NSCursor.setHiddenUntilMouseMoves from the window
   /// event monitor) — the view itself does no cursor management.
   private var videoSurface: some View { SomePlayerView(player: player) }
-  /// No video open: what to do, the Open button, and the videos played last.
+  /// No video open: the inline welcome, with Open and Open from Device beside the videos played last.
   private var emptyState: some View {
     let recent = recentVideos
-    return VStack(spacing: 0) {
-      EmptyState(
-        systemImage: "play.rectangle", title: "No Video Open",
-        message: "Open an MKV, MP4 or MOV file, or drop one on this window. Videos you play show up here."
-      ) {
-        Button {
-          uiState.showFileImporter = true
-        } label: {
-          HStack(spacing: 4) {
-            Label("Open", systemImage: "folder")
-            Text("⌘O").opacity(0.8)
-          }
-        }.buttonStyle(.kitPrimary)
-        Button("Open from Device…") { uiState.showHubLibrary = true }.buttonStyle(.kit)
-      }.frame(maxHeight: recent.isEmpty ? .infinity : 280)
-      if !recent.isEmpty {
-        ScrollView {
-          KitSection(
-            "Recent", meta: recent.count == 1 ? "1 video" : "\(recent.count) videos", systemImage: "clock",
-            hue: .gray
-          ) {
-            ForEach(recent) { record in
-              SidebarRow(
-                URL(fileURLWithPath: record.filePath).lastPathComponent, subtitle: Self.recentLine(record),
-                systemImage: "film", hue: .indigo
-              ).action { openRecent(record) }
-            }
-          }.frame(maxWidth: 440).padding(KitMetrics.gutter).frame(maxWidth: .infinity)
-        }
+    return KitWelcome(
+      emptyTitle: "No Recent Videos",
+      emptyMessage: "Open an MKV, MP4 or MOV file, or drop one on this window. Videos you play show up here."
+    ) {
+      WelcomeAction("Open…", detail: "An MKV, MP4 or MOV file on this Mac", systemImage: "folder") {
+        uiState.showFileImporter = true
       }
-    }.frame(maxWidth: .infinity, maxHeight: .infinity).kitPane()
+      WelcomeAction(
+        "Open from Device…", detail: "A video on another of your devices", systemImage: "point.3.connected.trianglepath.dotted"
+      ) { uiState.showHubLibrary = true }
+    } recents: {
+      ForEach(recent) { record in
+        RecentItem(
+          URL(fileURLWithPath: record.filePath).lastPathComponent, subtitle: Self.recentLine(record),
+          date: record.lastPlayedAt.formatted(.relative(presentation: .named)), systemImage: "film",
+          id: record.filePath
+        ) { openRecent(record) }
+      }
+    }
+    .kitPane(.content)
   }
 
-  /// "12:48 · 2 days ago".
+  /// "12:48 · ~/Movies": the length and the folder.
   private static func recentLine(_ record: PlaybackRecord) -> String {
     let duration = Duration.seconds(record.duration).formatted(.time(pattern: .minuteSecond))
-    let played = record.lastPlayedAt.formatted(.relative(presentation: .named))
-    return "\(duration) · \(played)"
+    let folder = (URL(fileURLWithPath: record.filePath).deletingLastPathComponent().path as NSString)
+      .abbreviatingWithTildeInPath
+    return "\(duration) · \(folder)"
   }
 
   /// The title's meta line: the video codec and the length ("H264 · 1:00").
@@ -143,11 +133,11 @@ struct ContentView: View {
     return parts
   }
 
-  /// The 5 most recently played files that still exist on disk, newest
+  /// The 20 most recently played files that still exist on disk, newest
   /// first. Re-fetched on each render, so the list reflects the latest
   /// additions the moment the empty state appears.
   private var recentVideos: [PlaybackRecord] {
-    PlaybackStore.shared.recentVideos(limit: 5).filter {
+    PlaybackStore.shared.recentVideos(limit: 20).filter {
       FileManager.default.fileExists(atPath: $0.filePath)
     }
   }

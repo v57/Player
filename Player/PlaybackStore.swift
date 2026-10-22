@@ -161,6 +161,24 @@ import SwiftData
     try? modelContext.save()
   }
 
+  /// The screenshot demo's recent videos: each video in `folder`, newest first a day apart, a third of the way in.
+  /// Does nothing outside the demo.
+  func seedDemoHistory(folder: URL) {
+    guard ScreenshotDemo.isOn else { return }
+    let files = ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
+      .map { folder.appendingPathComponent($0) }
+      .filter { NativeSomePlayer.isSupportedFile($0) }
+      .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+    for (index, file) in files.enumerated() {
+      let duration = Double(600 + index * 1_337 % 5_400)
+      modelContext.insert(
+        PlaybackRecord(
+          filePath: file.path, position: duration / 3, duration: duration,
+          lastPlayedAt: .now.addingTimeInterval(-Double(index) * 86_400 - 3_600)))
+    }
+    try? modelContext.save()
+  }
+
   // MARK: - Track picks
 
   /// Saves a manual pick so the same choice carries to the next video.
