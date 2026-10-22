@@ -8,7 +8,7 @@ import VaultKit
 struct HubLibrarySheet: View {
   @EnvironmentObject private var player: SomePlayerBox
   @StateObject private var library = HubLibrary()
-  @Environment(\.dismiss) private var dismiss
+  @Environment(\.kitDismiss) private var dismiss
 
   var body: some View {
     KitSheet(

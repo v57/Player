@@ -81,12 +81,10 @@ struct ContentView: View {
       if case .success(let urls) = result, let url = urls.first {
         Task { try? await player.open(url) }
       }
-    }.sheet(isPresented: Binding(get: { uiState.showHubLibrary }, set: { uiState.showHubLibrary = $0 })) {
-      HubLibrarySheet().environmentObject(player).componentKit(accent: PlayerApp.accent)
-    }.alert("Player Error", isPresented: errorBinding) {
-      Button("OK", role: .cancel) {}
-    } message: {
-      Text(player.errorMessage ?? "")
+    }.kitSheet(isPresented: Binding(get: { uiState.showHubLibrary }, set: { uiState.showHubLibrary = $0 })) {
+      HubLibrarySheet()
+    }.kitSheet(isPresented: errorBinding) {
+      ErrorSheet(message: player.errorMessage ?? "")
     }
   }
   /// The native engine's video surface: a Metal sink the player pushes
@@ -236,4 +234,19 @@ extension UTType {
   /// demuxers (M4V conforms to MPEG-4). Not `.movie`: that would offer AVI,
   /// MPEG-TS and others the engine cannot open.
   static var playableMovies: [UTType] { [.mkv, .mpeg4Movie, .quickTimeMovie] }
+}
+
+/// The engine's error, as a kit sheet: what went wrong and OK.
+private struct ErrorSheet: View {
+  let message: String
+  @Environment(\.kitDismiss) private var dismiss
+
+  var body: some View {
+    KitSheet(title: "Couldn’t Play the Video", systemImage: "exclamationmark.triangle", hue: .red) {
+      Text(message).kitFont(.body).fixedSize(horizontal: false, vertical: true)
+    } footer: {
+      Spacer()
+      Button("OK") { dismiss() }.buttonStyle(.kitPrimary).keyboardShortcut(.defaultAction)
+    }
+  }
 }
