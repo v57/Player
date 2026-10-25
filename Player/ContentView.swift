@@ -15,7 +15,8 @@ struct ContentView: View {
   var body: some View {
     ZStack {
       // Hidden while nothing is open: after a stop the Metal layer keeps the last frame it drew.
-      videoSurface.opacity(player.fileName == nil ? 0 : 1)
+      // Edge to edge: under the title bar, which hides with the controls.
+      videoSurface.opacity(player.fileName == nil ? 0 : 1).ignoresSafeArea()
       if player.fileName == nil { emptyState }
     }.frame(maxWidth: .infinity, maxHeight: .infinity)
       // Whole-window drop target: files dragged onto the window open
@@ -33,7 +34,8 @@ struct ContentView: View {
         // waiting for it to grow and will retry. Shown while that wait is
         // active, in the top-leading corner above the video.
         if player.isWaitingForFileUpdate { waitingBadge }
-      }.kitDropTarget(isDropTargeted, cornerRadius: KitMetrics.radiusWindow)
+      }.background { WindowReader { uiState.attach(to: $0) } }
+      .kitDropTarget(isDropTargeted, cornerRadius: KitMetrics.radiusWindow)
       .overlay { if isDropTargeted { dropTargetLabel } }.onHover { uiState.hovering = $0 }
       .animation(.kit, value: uiState.hovering).animation(.kit, value: uiState.controlsHidden)
       .animation(.kit, value: player.isPlaying).animation(.kit, value: player.isWaitingForFileUpdate)
@@ -48,6 +50,8 @@ struct ContentView: View {
         }
       }
       .kitHidesSystemTitle(player.fileName != nil)
+      // The video runs under the title bar (PlayerUIState.applyWindowChrome).
+      .toolbarBackground(player.fileName != nil ? .hidden : .automatic, for: .windowToolbar)
       .onReceive(
         NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)
       ) { note in
@@ -60,19 +64,14 @@ struct ContentView: View {
         uiState.removeEventMonitor()
       }.onReceive(
         NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)
-      ) { note in
-        // Edge-to-edge video: let the content extend under the title bar,
-        // which only appears on hover at the top of the screen.
-        guard let window = note.object as? NSWindow else { return }
-        window.titlebarAppearsTransparent = true
-        window.styleMask.insert(.fullSizeContentView)
+      ) { _ in
+        // Edge-to-edge video under the title bar, which only appears on hover at the top of the screen.
         uiState.fullScreenChanged(true)
       }.onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification))
-    { note in
-      guard let window = note.object as? NSWindow else { return }
-      window.titlebarAppearsTransparent = false
-      window.styleMask.remove(.fullSizeContentView)
+    { _ in
       uiState.fullScreenChanged(false)
+    }.onChange(of: player.fileName != nil) {
+      uiState.applyWindowChrome()
     }.fileImporter(
       isPresented: Binding(
         get: { uiState.showFileImporter }, set: { uiState.showFileImporter = $0 }),
@@ -224,6 +223,28 @@ extension UTType {
   /// demuxers (M4V conforms to MPEG-4). Not `.movie`: that would offer AVI,
   /// MPEG-TS and others the engine cannot open.
   static var playableMovies: [UTType] { [.mkv, .mpeg4Movie, .quickTimeMovie] }
+}
+
+/// Reports the window the view is in, once it's in one.
+private struct WindowReader: NSViewRepresentable {
+  let onWindow: (NSWindow) -> Void
+
+  func makeNSView(context: Context) -> ReaderView {
+    let view = ReaderView()
+    view.onWindow = onWindow
+    return view
+  }
+
+  func updateNSView(_ view: ReaderView, context: Context) {}
+
+  final class ReaderView: NSView {
+    var onWindow: (NSWindow) -> Void = { _ in }
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      if let window { onWindow(window) }
+    }
+  }
 }
 
 /// The engine's error, as a kit sheet: what went wrong and OK.

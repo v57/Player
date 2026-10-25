@@ -26,8 +26,11 @@ import PlayerKit
 
   /// True while the controls overlay is hidden. Hidden only while media is
   /// actually playing; the overlay stays up on pause/stop (and when there's
-  /// no file), so the controls can never get stuck off-screen.
-  @Published var controlsHidden = false
+  /// no file), so the controls can never get stuck off-screen. The window's
+  /// title bar (traffic lights and toolbar) hides with them.
+  @Published var controlsHidden = false {
+    didSet { if controlsHidden != oldValue { applyWindowChrome() } }
+  }
 
   /// True while the fullscreen idle timer has hidden the cursor (via
   /// NSCursor.setHiddenUntilMouseMoves; re-shows on the next mouse move).
@@ -50,12 +53,14 @@ import PlayerKit
   /// drive both the overlay hide and the fullscreen cursor hide together.
   private var eventMonitor: Any?
   private var isFullScreen = false
+  /// The player's window, for its title bar.
+  private weak var window: NSWindow?
 
   // MARK: - Window lifecycle (called from ContentView)
 
   func install(in window: NSWindow) {
     removeEventMonitor()
-    isFullScreen = window.styleMask.contains(.fullScreen)
+    attach(to: window)
     let monitor = NSEvent.addLocalMonitorForEvents(matching: [
       .mouseMoved, .leftMouseDragged, .rightMouseDragged, .leftMouseDown, .rightMouseDown,
       .scrollWheel, .keyDown, .keyUp,
@@ -160,9 +165,45 @@ import PlayerKit
 
   func fullScreenChanged(_ entered: Bool) {
     isFullScreen = entered
+    applyWindowChrome()
     // Fresh timer in the new window context.
     restartIdleTimer()
     noteInteraction()
+  }
+
+  // MARK: - Title bar
+
+  /// The window the player's view is in: from the moment the view is in it, before the window is ever key.
+  func attach(to window: NSWindow) {
+    self.window = window
+    isFullScreen = window.styleMask.contains(.fullScreen)
+    applyWindowChrome()
+  }
+
+  /// While a video is open the content runs under the title bar, edge to edge (SwiftUI's window has full-size
+  /// content; ContentView clears the toolbar's background), and in a window the title bar fades out and in with
+  /// the controls. In full screen the title bar is clear and AppKit shows it on hover at the top of the screen.
+  /// Called when a video opens or closes, the window enters or leaves full screen, and the controls hide or show.
+  func applyWindowChrome() {
+    guard let window else { return }
+    window.titlebarAppearsTransparent = isFullScreen
+    if isFullScreen { window.styleMask.insert(.fullSizeContentView) }
+    guard let titlebar = Self.titlebarContainer(of: window) else { return }
+    let alpha: CGFloat = !isFullScreen && player?.fileName != nil && controlsHidden ? 0 : 1
+    guard titlebar.alphaValue != alpha else { return }
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = 0.25
+      titlebar.animator().alphaValue = alpha
+    }
+  }
+
+  /// The view holding the traffic lights and the toolbar (AppKit's NSTitlebarContainerView).
+  private static func titlebarContainer(of window: NSWindow) -> NSView? {
+    var view = window.standardWindowButton(.closeButton)?.superview
+    while let current = view, !NSStringFromClass(type(of: current)).contains("TitlebarContainer") {
+      view = current.superview
+    }
+    return view
   }
 
   // MARK: - Auto-hide

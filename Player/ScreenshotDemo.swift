@@ -11,6 +11,8 @@ import PlayerKit
 ///   --subtitle <stream>      then shows that subtitle stream
 ///   --seek <seconds>         then seeks there
 ///   --pause                  then pauses, so the picture holds still with the controls up
+///   --idle                   then lets the controls and the title bar hide after the idle delay, as with the
+///                            pointer at rest
 ///   --recents <folder>       lists the folder's videos as played over the last days (the welcome's recent videos)
 ///   --hub-library <page>     shows Open from Device on demo devices: `devices` (with a failed connection) or `folder`
 ///
@@ -71,6 +73,8 @@ enum ScreenshotDemo {
       await waitUntil { player.state == .paused }
     }
     ui.showControls()
+    // The idle timer starts on an interaction, which a background launch never gets.
+    if arguments.contains("--idle") { ui.noteInteraction() }
   }
 
   /// Polls the engine's state until `condition` holds, for at most `timeout` seconds.
