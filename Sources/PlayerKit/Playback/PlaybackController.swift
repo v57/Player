@@ -116,8 +116,8 @@ public final class PlaybackController: @unchecked Sendable {
     /// Commands that reposition the demuxer (they also cancel an EOF drain).
     var repositions: Bool {
       switch self {
-      case .resume, .seek, .switchAudio, .switchSubtitle: return true
-      case .pause, .stop: return false
+      case .resume, .seek, .switchAudio: return true
+      case .pause, .switchSubtitle, .stop: return false
       }
     }
 
@@ -239,14 +239,21 @@ public final class PlaybackController: @unchecked Sendable {
   private var demuxer: FFmpegDemuxer?
   private var videoStreamIndex: Int?
   private var audioStreamIndex: Int?
-  private var subtitleStreamIndex: Int?
   private var videoTB: (num: Int64, den: Int32) = (1, 1000)
 
-  // Subtitle cues (SRT Phase A): parsed from subtitle-stream packets.
-  private var subtitleCues: [SubtitleCue] = []
+  // Subtitle cues (SRT Phase A): parsed from the packets of EVERY text
+  // subtitle stream as the loop reads them, keyed by stream, so selecting a
+  // stream only changes which cues are shown. Selecting one used to re-seek
+  // the demuxer to re-collect the stream's cues, which restarted the video
+  // and audio pipelines for a few bytes of text (and froze the picture).
+  private var subtitleCues: [Int: [SubtitleCue]] = [:]
   private var subtitleCuesLock = NSLock()
-  /// Codec of the active subtitle stream (decides how packet text is parsed).
-  private var subtitleCodec = ""
+  /// The stream whose cues `subtitleCue(at:)` returns, or nil when subtitles
+  /// are off. Under subtitleCuesLock: the main actor reads it.
+  private var shownSubtitleStream: Int?
+  /// Codec of each text subtitle stream (decides how packet text is parsed).
+  /// Set at probe; streams the overlay cannot render are left out.
+  private var subtitleCodecs: [Int: String] = [:]
 
   // Video decode
   private var vtSession: VTDecompressionSession?
@@ -720,9 +727,17 @@ public final class PlaybackController: @unchecked Sendable {
     // made the engine render subtitles even when the app's stored pick (or the
     // UI) said off, and re-enabled the container default on every open / the
     // partial-download retry. An explicit selection (applyPendingTrackPicks /
-    // the menu) sets subtitleStreamIndex; probe only records that the stream
-    // exists for the track list.
-    self.subtitleStreamIndex = nil
+    // the menu) sets shownSubtitleStream; probe only records that the stream
+    // exists for the track list. Cues are collected for every text stream
+    // regardless (see subtitleCues).
+    subtitleCodecs = [:]
+    for t in all
+    where t.type == MEDIA_TRACK_TYPE_SUBTITLE.rawValue && Self.isSupportedSubtitleCodec(t.codecName) {
+      subtitleCodecs[t.id] = t.codecName
+    }
+    subtitleCuesLock.lock()
+    shownSubtitleStream = nil
+    subtitleCuesLock.unlock()
     self.videoTB = (Int64(video.timeBase.num), video.timeBase.den)
 
     try setupVideoToolbox(demuxer: demuxer, video: video)
@@ -1498,7 +1513,7 @@ public final class PlaybackController: @unchecked Sendable {
       case .switchAudio(let streamIndex):
         performAudioSwitch(streamIndex: streamIndex, demuxer: demuxer)
       case .switchSubtitle(let streamIndex):
-        performSubtitleSwitch(streamIndex: streamIndex, demuxer: demuxer)
+        performSubtitleSwitch(streamIndex: streamIndex)
       case .stop:
         performStop()
         commandLock.lock()
@@ -1553,7 +1568,6 @@ public final class PlaybackController: @unchecked Sendable {
   private func tick(demuxer: FFmpegDemuxer, eof: inout Bool) {
     let videoIndex = videoStreamIndex
     let audioIndex = audioStreamIndex
-    let subIndex = subtitleStreamIndex
 
     // Present anything due (audio clock master).
     presentDueFrames()
@@ -1632,8 +1646,8 @@ public final class PlaybackController: @unchecked Sendable {
           discardAudioBefore = nil
         }
         feedAudioPacket(pkt)
-      } else if let subIndex, pkt.streamID == subIndex {
-        collectSubtitlePacket(pkt)
+      } else if let codec = subtitleCodecs[pkt.streamID] {
+        collectSubtitlePacket(pkt, codec: codec)
       }
     } catch {
       // A read error can be a genuinely corrupt stream or the boundary of a
@@ -1710,30 +1724,7 @@ public final class PlaybackController: @unchecked Sendable {
       // Coarse seek lands on the keyframe BEFORE the target; skip
       // pre-target audio so the audio pipeline starts at the target.
       discardAudioBefore = seconds
-      // Rebuild the VT SESSION from the format description parsed at open.
-      //
-      // NEVER re-run setupVideoToolbox here. It re-parses CodecPrivate and, for
-      // streams whose parameter sets are IN-BAND (a bare 23-byte hvcC with
-      // numOfArrays == 0 — video.mkv is exactly this), falls into inBandHVCC,
-      // which REWINDS THE DEMUXER TO 0. That silently discards the seek: the
-      // demux loop then walks the media from the start while the audio clock
-      // free-runs, and playback resumes with the picture that far behind the
-      // sound. Measured before the fix (seek to 287.269 s on a 4K HEVC file):
-      // 23.6 s of walking at ~300 dropped frames/s, `aud=-23.2s`, then
-      // `drift=-22.07s` with the picture stuck ~7 fps behind the audio.
-      //
-      // Codec parameters cannot change across a seek within one file, and
-      // `vtFormatDesc` survives the session invalidation above (it is a
-      // separate CoreMedia object we still own), so the session is simply
-      // recreated from it. setupVTCommon is the shared session builder.
-      if let fd = vtFormatDesc {
-        try setupVTCommon(formatDesc: fd)
-      } else if let vStream = videoStreamIndex, let vTrack = demuxer.track(at: vStream) {
-        try setupVideoToolbox(demuxer: demuxer, video: vTrack)
-      }
-      // New session: restart the decoder accounting (in-flight frames of the
-      // invalidated session never come back).
-      resetVTCounters()
+      try rebuildVTSession(demuxer: demuxer)
       startMonotonic = CACurrentMediaTime() - seconds
       audioClockOffset = seconds
       // A seek while paused moves the frozen position, so the timer
@@ -1748,6 +1739,42 @@ public final class PlaybackController: @unchecked Sendable {
       }
       stateChanged()
     } catch { stateChanged() }
+  }
+
+  /// Replaces the VideoToolbox session after the demuxer moved (seek, audio
+  /// switch), from the format description parsed at open. The new session
+  /// collects frames under the CURRENT `generation`, so call it after bumping
+  /// it: a session keeps the generation it was made with, and every frame it
+  /// decodes after a bump is dropped as stale (an audio switch that bumped
+  /// without a new session froze the picture).
+  ///
+  /// NEVER re-run setupVideoToolbox when `vtFormatDesc` exists. It re-parses
+  /// CodecPrivate and, for streams whose parameter sets are IN-BAND (a bare
+  /// 23-byte hvcC with numOfArrays == 0 — video.mkv is exactly this), falls
+  /// into inBandHVCC, which REWINDS THE DEMUXER TO 0. That silently discards
+  /// the seek: the demux loop then walks the media from the start while the
+  /// audio clock free-runs, and playback resumes with the picture that far
+  /// behind the sound. Measured before the fix (seek to 287.269 s on a 4K HEVC
+  /// file): 23.6 s of walking at ~300 dropped frames/s, `aud=-23.2s`, then
+  /// `drift=-22.07s` with the picture stuck ~7 fps behind the audio.
+  ///
+  /// Codec parameters cannot change within one file, and `vtFormatDesc`
+  /// survives the session invalidation (it is a separate CoreMedia object we
+  /// still own), so the session is simply recreated from it. setupVTCommon is
+  /// the shared session builder.
+  private func rebuildVTSession(demuxer: FFmpegDemuxer) throws {
+    if let vtSession {
+      VTDecompressionSessionInvalidate(vtSession)
+      self.vtSession = nil
+    }
+    if let fd = vtFormatDesc {
+      try setupVTCommon(formatDesc: fd)
+    } else if let vStream = videoStreamIndex, let vTrack = demuxer.track(at: vStream) {
+      try setupVideoToolbox(demuxer: demuxer, video: vTrack)
+    }
+    // New session: restart the decoder accounting (in-flight frames of the
+    // invalidated session never come back).
+    resetVTCounters()
   }
 
   /// Decode + present the single video frame at/after `target` while paused,
@@ -1790,7 +1817,11 @@ public final class PlaybackController: @unchecked Sendable {
       }
       // Keep decoding forward from the keyframe until the target frame lands.
       guard let pkt = try? demuxer.readPacket() else { return }  // EOF before target
-      if pkt.streamID == videoStreamIndex { feedVideoPacket(pkt) }
+      if pkt.streamID == videoStreamIndex {
+        feedVideoPacket(pkt)
+      } else if let codec = subtitleCodecs[pkt.streamID] {
+        collectSubtitlePacket(pkt, codec: codec)  // the cue at the target shows while paused
+      }
       usleep(1000)
     }
   }
@@ -1858,7 +1889,7 @@ public final class PlaybackController: @unchecked Sendable {
     }
     clearPendingVideoPackets()
     clearSubtitleCues()
-    subtitleCodec = ""
+    subtitleCodecs = [:]
     vtFormatDesc = nil
     enhancementChain = nil
     enhancementLock.lock()
@@ -1872,7 +1903,6 @@ public final class PlaybackController: @unchecked Sendable {
     videoStreamIndex = nil
     audioStreamIndex = nil
     publishAudioStream()
-    subtitleStreamIndex = nil
     clearAllSinks()
   }
 
@@ -2298,14 +2328,14 @@ public final class PlaybackController: @unchecked Sendable {
   /// plain text (with SRT markup stripped); ASS/SSA packets carry the event
   /// fields in front of the text. Timing comes from pts/duration in the
   /// packet's stream time base.
-  private func collectSubtitlePacket(_ pkt: DemuxPacket) {
+  private func collectSubtitlePacket(_ pkt: DemuxPacket, codec: String) {
     guard let start = pkt.ptsSeconds,
-      let text = Self.subtitleText(from: pkt.data, codec: subtitleCodec)
+      let text = Self.subtitleText(from: pkt.data, codec: codec)
     else { return }
     let cue = SubtitleCue(start: start, end: start + (pkt.durationSeconds ?? 2.0), text: text)
     subtitleCuesLock.lock()
-    let inserted = Self.insertCue(cue, into: &subtitleCues)
-    let count = subtitleCues.count
+    let inserted = Self.insertCue(cue, into: &subtitleCues[pkt.streamID, default: []])
+    let count = subtitleCues[pkt.streamID]?.count ?? 0
     subtitleCuesLock.unlock()
     // Diagnostic: log the first few cues.
     if inserted, count <= 4 {
@@ -2388,13 +2418,15 @@ public final class PlaybackController: @unchecked Sendable {
   func subtitleCue(at time: Double) -> SubtitleCue? {
     subtitleCuesLock.lock()
     defer { subtitleCuesLock.unlock() }
-    return Self.activeCue(at: time, in: subtitleCues)
+    guard let stream = shownSubtitleStream, let cues = subtitleCues[stream] else { return nil }
+    return Self.activeCue(at: time, in: cues)
   }
 
-  /// Clears collected cues (track switch / seek).
+  /// Clears collected cues and turns subtitles off (stop).
   private func clearSubtitleCues() {
     subtitleCuesLock.lock()
     subtitleCues.removeAll()
+    shownSubtitleStream = nil
     subtitleCuesLock.unlock()
   }
 
@@ -2459,6 +2491,11 @@ public final class PlaybackController: @unchecked Sendable {
     // Re-seek so both pipelines restart at the current position.
     lastPresentedPTS = current
     _ = try? demuxer.seek(to: current)
+    do {
+      try rebuildVTSession(demuxer: demuxer)
+    } catch {
+      NSLog("[Native] audio switch: video decoder rebuild failed: %@", error.localizedDescription)
+    }
     discardAudioBefore = current
     startMonotonic = CACurrentMediaTime() - current
     audioClockOffset = current
@@ -2473,63 +2510,23 @@ public final class PlaybackController: @unchecked Sendable {
     stateChanged()
   }
 
-  /// Enables/disables the subtitle stream. Clears collected cues and
-  /// re-seeks so cues are re-collected from the new stream's packets.
+  /// Shows the cues of a subtitle stream (nil: off). Cues are collected for
+  /// every text stream as it is read (see subtitleCues), so nothing is
+  /// re-read: video and audio play on untouched.
   func selectSubtitleTrack(streamIndex: Int?) { submit(.switchSubtitle(streamIndex)) }
 
-  private func performSubtitleSwitch(streamIndex: Int?, demuxer: FFmpegDemuxer) {
-    // No-op when the subtitle state isn't actually changing (e.g. the
-    // partial-download retry re-applies an already-off preference). Without
-    // this the re-seek below runs once per open for a permanently-off subtitle.
+  private func performSubtitleSwitch(streamIndex: Int?) {
     // Only text subtitles can be rendered; anything else is treated as off.
     var streamIndex = streamIndex
-    var codec = ""
-    if let index = streamIndex {
-      if let track = demuxer.track(at: index), track.type == MEDIA_TRACK_TYPE_SUBTITLE.rawValue,
-        Self.isSupportedSubtitleCodec(track.codecName)
-      {
-        codec = track.codecName
-      } else {
-        NSLog("[Native] subtitle stream %d is not a text subtitle track — off", index)
-        streamIndex = nil
-      }
+    if let index = streamIndex, subtitleCodecs[index] == nil {
+      NSLog("[Native] subtitle stream %d is not a text subtitle track — off", index)
+      streamIndex = nil
     }
-    guard streamIndex != subtitleStreamIndex else { return }
-    clearSubtitleCues()
-    subtitleStreamIndex = streamIndex
-    subtitleCodec = codec
-    // The seek below re-positions the demuxer BACKWARD to a keyframe, so the
-    // loop re-reads VIDEO from the keyframe before the target. Reset video
-    // presentation state (mirror of performSeek) so that window is dropped
-    // instead of re-plays or stalling: a stale lastPresentedPTS would drop
-    // every re-decoded frame in the keyframe..target window (pts < last), and
-    // the still-queued pre-switch frames would replay. discardAudioBefore
-    // (below) keeps the audio side from backlogging.
-    generation &+= 1
-    let gen = generation
-    videoQueueLock.lock()
-    videoQueue.removeAll()
-    videoQueueGeneration = gen
-    videoQueueLock.unlock()
-    clearPendingVideoPackets()
-    do {
-      let current = currentClock()
-      lastPresentedPTS = current
-      try demuxer.seek(to: current)
-      // The demuxer re-seeks BACKWARD to a keyframe (GOP-granular, ~10 s on
-      // this corpus), so the loop re-reads VIDEO and AUDIO from that
-      // keyframe. Without this guard every pre-target audio packet
-      // (keyframe -> current) is re-decoded and re-scheduled, ballooning
-      // audioSecondsAhead far past the maxAudioAheadSeconds cap — the demux
-      // loop then spends every tick in the audio backpressure sleep
-      // (usleep(4000); return) instead of reading video or presenting
-      // frames. That is the "serious fps drop until I pause and unpause":
-      // pause resets the node + audioFramesScheduled=0, and resume rewinds
-      // the demuxer to pausedClock and re-arms discardAudioBefore, clearing
-      // the backlog. Mirrors performSeek / performAudioSwitch.
-      discardAudioBefore = current
-      NSLog("[Native] subtitle track set to %@", streamIndex.map(String.init) ?? "off")
-    } catch { stateChanged() }
+    subtitleCuesLock.lock()
+    let changed = streamIndex != shownSubtitleStream
+    shownSubtitleStream = streamIndex
+    subtitleCuesLock.unlock()
+    if changed { NSLog("[Native] subtitle track set to %@", streamIndex.map(String.init) ?? "off") }
   }
 
   // MARK: - EOF

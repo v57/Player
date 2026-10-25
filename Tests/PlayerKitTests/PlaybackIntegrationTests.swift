@@ -55,12 +55,73 @@ final class PlaybackIntegrationTests: XCTestCase {
     player.seek(to: 1.0, exact: true)
     try await waitUntil(5, "SRT cue") { player.activeSubtitleCue == "Corpus sub one" }
 
-    player.selectSubtitleTrack(4)  // ASS: "Corpus ASS line" 0.5-2.5 s
+    player.selectSubtitleTrack(4)  // ASS: "Corpus ASS line" 5-7 s
     player.seek(to: 1.0, exact: true)
     try await waitUntil(5, "ASS cue") { player.activeSubtitleCue == "Corpus ASS line" }
     XCTAssertTrue(player.isPlaying)
     player.stop()
     XCTAssertNil(player.audioTrackID, "selection does not leak past stop")
+  }
+
+  /// Selecting a subtitle near the start used to freeze the picture: the
+  /// switch re-seeked and gated decoded frames by a new generation without a
+  /// new VideoToolbox session, so every later frame was dropped as stale.
+  func testSubtitleSelectedNearTheStartKeepsThePictureMoving() async throws {
+    let url = try media("h264-srt.mkv")
+    let player = NativeSomePlayer()
+    let frames = FrameRecorder()
+    player.registerSink(frames)
+    try await player.open(url)
+    try await waitUntil(5, "playing") { player.state == .playing }
+
+    player.selectSubtitleTrack(1)  // SRT: "Corpus sub one" 0.5-2.5 s, "Corpus sub two" 3-5 s
+    try await waitUntil(5, "first cue") { player.activeSubtitleCue == "Corpus sub one" }
+    try await waitUntil(5, "second cue") { player.activeSubtitleCue == "Corpus sub two" }
+    try await waitUntil(2, "picture at the clock") { (frames.lastPTS ?? 0) >= 3.0 }
+    XCTAssertTrue(player.isPlaying)
+    player.stop()
+  }
+
+  /// A subtitle selected mid-playback shows the cue on screen at once, with no
+  /// seek (cues of every text stream are collected as they are read), while
+  /// the picture and the clock keep running.
+  func testSubtitleSelectedMidPlaybackShowsTheCurrentCue() async throws {
+    let url = try media("h264-ac3-mono-stereo-subs.mkv")
+    let player = NativeSomePlayer()
+    let frames = FrameRecorder()
+    player.registerSink(frames)
+    try await player.open(url)
+    try await waitUntil(5, "playing") { player.state == .playing }
+    try await waitUntil(5, "inside the first cue") { player.position >= 1.0 }
+
+    player.selectSubtitleTrack(3)  // SRT: "Corpus sub one" 0.5-2.5 s
+    try await waitUntil(1, "SRT cue") { player.activeSubtitleCue == "Corpus sub one" }
+    try await waitUntil(5, "inside the ASS cue") { player.position >= 5.2 }
+    player.selectSubtitleTrack(4)  // ASS: "Corpus ASS line" 5-7 s
+    try await waitUntil(1, "ASS cue") { player.activeSubtitleCue == "Corpus ASS line" }
+    let switched = player.position
+    try await waitUntil(3, "picture past the switch") { (frames.lastPTS ?? 0) >= switched + 1.0 }
+    player.selectSubtitleTrack(nil)
+    try await waitUntil(1, "subtitles off") { player.activeSubtitleCue == nil }
+    XCTAssertTrue(player.isPlaying)
+    player.stop()
+  }
+
+  /// An audio switch keeps the picture moving (same stale-generation freeze).
+  func testAudioSwitchKeepsThePictureMoving() async throws {
+    let url = try media("h264-multiaudio.mkv")
+    let player = NativeSomePlayer()
+    let frames = FrameRecorder()
+    player.registerSink(frames)
+    try await player.open(url)
+    try await waitUntil(5, "playing") { player.state == .playing }
+    try await waitUntil(5, "advancing") { player.position >= 1.0 }
+    player.selectAudioTrack(2)
+    try await waitUntil(5, "audio switch") { player.audioTrackID == 2 }
+    let switched = player.position
+    try await waitUntil(3, "picture past the switch") { (frames.lastPTS ?? 0) >= switched + 1.0 }
+    XCTAssertTrue(player.isPlaying)
+    player.stop()
   }
 
   /// Playing to the end reports `.ended` (not the download "Waiting" state),
@@ -196,4 +257,11 @@ final class PlaybackIntegrationTests: XCTestCase {
     XCTAssertTrue(player.isPlaying)
     player.stop()
   }
+}
+
+/// Records the last frame the engine presents.
+@MainActor private final class FrameRecorder: VideoFrameSink {
+  var lastPTS: Double?
+  func present(frame: NativeVideoFrame) { lastPTS = frame.pts }
+  func clear() {}
 }
