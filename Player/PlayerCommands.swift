@@ -89,6 +89,8 @@ struct PlayerCommands: Commands {
       } else {
         Text("No subtitle tracks").disabled(true)
       }
+      Divider()
+      Button("Edit Style…") { uiState.showSubtitleStyle = true }.disabled(player.fileName == nil)
     }
   }
 

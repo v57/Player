@@ -29,6 +29,11 @@ struct ContentView: View {
         if player.fileName != nil, uiState.controlsVisible {
           TimelineBar(player: player).transition(.opacity)
         }
+      }.overlay(alignment: .topTrailing) {
+        // At the top, clear of the subtitles it styles.
+        if uiState.showSubtitleStyle, player.fileName != nil {
+          SubtitleStylePanel().padding(KitMetrics.gutter * 2).transition(.move(edge: .trailing).combined(with: .opacity))
+        }
       }.overlay(alignment: .topLeading) {
         // Playback hit the end of a still-downloading file; the engine is
         // waiting for it to grow and will retry. Shown while that wait is
@@ -39,7 +44,7 @@ struct ContentView: View {
       .overlay { if isDropTargeted { dropTargetLabel } }.onHover { uiState.hovering = $0 }
       .animation(.kit, value: uiState.hovering).animation(.kit, value: uiState.controlsHidden)
       .animation(.kit, value: player.isPlaying).animation(.kit, value: player.isWaitingForFileUpdate)
-      .animation(.kitFast, value: isDropTargeted)
+      .animation(.kitFast, value: isDropTargeted).animation(.kit, value: uiState.showSubtitleStyle)
       .navigationTitle(player.fileName ?? "Player")
       .toolbar {
         // The open video's rich title replaces the window's own.
@@ -90,7 +95,11 @@ struct ContentView: View {
   /// decoded frames into. Cursor auto-hide in fullscreen is owned by
   /// PlayerUIState (NSCursor.setHiddenUntilMouseMoves from the window
   /// event monitor) — the view itself does no cursor management.
-  private var videoSurface: some View { SomePlayerView(player: player) }
+  private var videoSurface: some View {
+    SomePlayerView(
+      player: player, subtitleStyle: uiState.subtitleStyle,
+      subtitleSample: uiState.showSubtitleStyle ? SubtitleStylePanel.sample : nil)
+  }
   /// No video open: the inline welcome, with Open and Open from Device beside the videos played last.
   private var emptyState: some View {
     let recent = recentVideos

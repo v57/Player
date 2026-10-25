@@ -11,6 +11,7 @@ import PlayerKit
 ///   --subtitle <stream>      then shows that subtitle stream
 ///   --seek <seconds>         then seeks there
 ///   --pause                  then pauses, so the picture holds still with the controls up
+///   --subtitle-style         then opens Edit Style (the subtitle style panel)
 ///   --idle                   then lets the controls and the title bar hide after the idle delay, as with the
 ///                            pointer at rest
 ///   --recents <folder>       lists the folder's videos as played over the last days (the welcome's recent videos)
@@ -73,6 +74,7 @@ enum ScreenshotDemo {
       await waitUntil { player.state == .paused }
     }
     ui.showControls()
+    ui.showSubtitleStyle = arguments.contains("--subtitle-style")
     // The idle timer starts on an interaction, which a background launch never gets.
     if arguments.contains("--idle") { ui.noteInteraction() }
   }

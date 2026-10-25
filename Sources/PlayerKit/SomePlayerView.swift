@@ -13,18 +13,29 @@ import SwiftUI
 /// register the sink — mirroring the old app-side NativeVideoView.
 public struct SomePlayerView: NSViewRepresentable {
   @ObservedObject public var player: SomePlayerBox
+  var subtitleStyle: SubtitleStyle
+  var subtitleSample: String?
 
-  public init(player: SomePlayerBox) { self.player = player }
+  /// `subtitleSample` shows while no cue is on screen (a style being edited, on a video without subtitles).
+  public init(player: SomePlayerBox, subtitleStyle: SubtitleStyle = SubtitleStyle(), subtitleSample: String? = nil) {
+    self.player = player
+    self.subtitleStyle = subtitleStyle
+    self.subtitleSample = subtitleSample
+  }
 
   public func makeNSView(context: Context) -> MediaMetalView {
     let view = MediaMetalView(frame: .zero)
     view.player = player
+    view.subtitleStyle = subtitleStyle
+    view.subtitleSample = subtitleSample
     if let engine = player.engine as? NativeSomePlayer { engine.registerSink(view) }
     return view
   }
 
   public func updateNSView(_ nsView: MediaMetalView, context: Context) {
     nsView.player = player
+    nsView.subtitleStyle = subtitleStyle
+    nsView.subtitleSample = subtitleSample
     if let engine = player.engine as? NativeSomePlayer { engine.registerSink(nsView) }
   }
 
@@ -43,7 +54,15 @@ public final class MediaMetalView: NSView, VideoFrameSink {
   private let subtitleLayer = CATextLayer()
   private let subtitleHalo = CALayer()
   /// The cue on screen, without markup; nil while none is.
+  private var subtitleCue: String?
+  /// What the subtitle layer shows: the cue, else the sample; nil while neither is.
   private var subtitleText: String?
+  var subtitleStyle = SubtitleStyle() {
+    didSet { if subtitleStyle != oldValue { layoutSubtitleLayer() } }
+  }
+  var subtitleSample: String? {
+    didSet { if subtitleSample != oldValue { refreshSubtitle() } }
+  }
   /// The boxed player (set by the SwiftUI wrapper) for key/click transport.
   weak var player: SomePlayerBox?
   /// One-shot warnings: a frame arrived but nothing could render it.
@@ -146,15 +165,23 @@ public final class MediaMetalView: NSView, VideoFrameSink {
     showSubtitle(cue.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression))
   }
 
-  private func showSubtitle(_ text: String?) {
+  private func showSubtitle(_ cue: String?) {
+    guard cue != subtitleCue else { return }
+    subtitleCue = cue
+    refreshSubtitle()
+  }
+
+  private func refreshSubtitle() {
+    let text = subtitleCue ?? subtitleSample
     guard text != subtitleText else { return }
     subtitleText = text
     subtitleHalo.isHidden = text == nil
     layoutSubtitleLayer()
   }
 
-  /// Bottom-centered, clear of the timeline: wrapped at 80% of the width, in semibold that grows with the view
-  /// (18pt in a small window). The layer's origin is bottom-left.
+  /// At the bottom, clear of the timeline, in semibold at the style's size: wrapped at the style's width, the lines
+  /// lined up at the left, in the middle or at the right (the block sits there too). The layer's origin is
+  /// bottom-left.
   private func layoutSubtitleLayer() {
     guard let subtitleText else { return }
     CATransaction.begin()
@@ -163,16 +190,29 @@ public final class MediaMetalView: NSView, VideoFrameSink {
     let text = NSAttributedString(
       string: subtitleText,
       attributes: [
-        .font: NSFont.systemFont(ofSize: max(18, (bounds.height * 0.04).rounded()), weight: .semibold),
+        .font: NSFont.systemFont(ofSize: subtitleStyle.size, weight: .semibold),
         .foregroundColor: NSColor.white,
       ])
-    let width = max(bounds.width * 0.8, 200)
+    let width = max(bounds.width * subtitleStyle.width.fraction, 200)
     let height = text.boundingRect(
       with: CGSize(width: width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading]
     ).height.rounded(.up) + 2
+    let margin = (bounds.width - bounds.width * SubtitleStyle.Width.wide.fraction) / 2
+    let x: CGFloat
+    switch subtitleStyle.alignment {
+    case .leading:
+      subtitleLayer.alignmentMode = .left
+      x = margin
+    case .center:
+      subtitleLayer.alignmentMode = .center
+      x = (bounds.width - width) / 2
+    case .trailing:
+      subtitleLayer.alignmentMode = .right
+      x = bounds.width - margin - width
+    }
     subtitleLayer.string = text
     subtitleLayer.contentsScale = window?.backingScaleFactor ?? 2.0
-    subtitleHalo.frame = CGRect(x: (bounds.width - width) / 2, y: 56, width: width, height: height)
+    subtitleHalo.frame = CGRect(x: x, y: 56, width: width, height: height)
     subtitleLayer.frame = subtitleHalo.bounds
   }
 

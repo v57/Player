@@ -19,6 +19,10 @@ import PlayerKit
   @Published var showFileImporter = false
   /// Open from Device: a video on one of the user's Hub devices.
   @Published var showHubLibrary = false
+  /// Edit Style (Subtitles menu): the subtitle style panel at the window's right side.
+  @Published var showSubtitleStyle = false
+  /// How subtitles draw: what the user applied last, or the panel's edits while it's open.
+  @Published var subtitleStyle = SubtitleStylePreferences.style
 
   /// True while the pointer is over the video area; reveals the controls
   /// overlay during playback.
