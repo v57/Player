@@ -107,6 +107,26 @@ final class PlaybackIntegrationTests: XCTestCase {
     player.stop()
   }
 
+  /// A pause right after a seek, while the loop is still decoding from the
+  /// keyframe (at 0 here) up to the target, used to hold the frame from before
+  /// the seek under a clock that read the target.
+  func testPauseDuringASeekShowsTheTargetFrame() async throws {
+    let url = try media("h264-srt.mkv")
+    let player = NativeSomePlayer()
+    let frames = FrameRecorder()
+    player.registerSink(frames)
+    try await player.open(url)
+    try await waitUntil(5, "playing") { player.state == .playing }
+    player.selectSubtitleTrack(1)  // SRT: "Corpus sub two" 3-5 s
+    player.seek(to: 3.5, exact: true)
+    player.pause()
+    try await waitUntil(5, "paused") { player.state == .paused }
+    try await waitUntil(2, "target frame") { (frames.lastPTS ?? 0) >= 3.5 - 0.05 }
+    XCTAssertEqual(player.position, 3.5, accuracy: 0.1)
+    XCTAssertEqual(player.activeSubtitleCue, "Corpus sub two")
+    player.stop()
+  }
+
   /// An audio switch keeps the picture moving (same stale-generation freeze).
   func testAudioSwitchKeepsThePictureMoving() async throws {
     let url = try media("h264-multiaudio.mkv")

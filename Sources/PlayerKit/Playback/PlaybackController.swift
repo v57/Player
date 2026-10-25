@@ -445,6 +445,10 @@ public final class PlaybackController: @unchecked Sendable {
   private var videoQueue: [NativeVideoFrame] = []
   private var videoQueueGeneration: UInt64 = 0
   private var lastPresentedPTS: Double?
+  /// A seek whose first frame is not on screen yet: the loop is still decoding
+  /// from the keyframe up to the target. A pause then finishes it as a paused
+  /// seek (see `.pause`).
+  private var seekFramePending = false
   private var droppedFrames = 0
   private var presentedFrames = 0
   /// VideoToolbox pipeline counters, for the 1 s summary. `vtSubmitted` counts
@@ -1507,6 +1511,12 @@ public final class PlaybackController: @unchecked Sendable {
         audioContentEndNode = 0
         pauseAudioEngine()
         invalidateNodeClock()
+        // Paused while a seek was still decoding from its keyframe up to the
+        // target (seconds on a long GOP): the picture would hold the frame
+        // from BEFORE the seek under a clock that reads the target, and the
+        // subtitle overlay (refreshed per presented frame) the old cue.
+        // Finish it as a paused seek, which presents the target frame.
+        if seekFramePending { performSeek(seconds: pausedClock, exact: true, demuxer: demuxer) }
         stateChanged()
       case .seek(let seconds, let exact):
         performSeek(seconds: seconds, exact: exact, demuxer: demuxer)
@@ -1700,6 +1710,7 @@ public final class PlaybackController: @unchecked Sendable {
     // regression guard with the target drops those frames at the
     // scheduler — mirror of discardAudioBefore for audio.
     lastPresentedPTS = seconds
+    seekFramePending = true
     verifySeekTarget = seconds
     NSLog("[Native] seek -> %.3f (gen %llu)", seconds, gen)
 
@@ -1831,6 +1842,7 @@ public final class PlaybackController: @unchecked Sendable {
   /// so a later resume continues from this frame with no pre-target replay.
   private func presentPausedFrame(_ frame: NativeVideoFrame) {
     lastPresentedPTS = frame.pts
+    seekFramePending = false
     presentedFrames += 1
     let f = frame
     for s in snapshotSinks() { Task { @MainActor in s.present(frame: f) } }
@@ -1851,6 +1863,7 @@ public final class PlaybackController: @unchecked Sendable {
     audioClockOffset = 0
     pausedClock = 0
     discardAudioBefore = nil
+    seekFramePending = false
     prematureEnd = nil
     drainDeadline = nil
     readEnd = nil
@@ -2226,6 +2239,7 @@ public final class PlaybackController: @unchecked Sendable {
         continue
       }
       lastPresentedPTS = frame.pts
+      seekFramePending = false
       presentedFrames += 1
       summaryPresented += 1
       summaryDrift = frame.pts - clock
