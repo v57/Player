@@ -22,7 +22,9 @@ import PlayerKit
 
   /// True while the pointer is over the video area; reveals the controls
   /// overlay during playback.
-  @Published var hovering = false
+  @Published var hovering = false {
+    didSet { if hovering != oldValue { applyWindowChrome() } }
+  }
 
   /// True while the controls overlay is hidden. Hidden only while media is
   /// actually playing; the overlay stays up on pause/stop (and when there's
@@ -181,15 +183,15 @@ import PlayerKit
   }
 
   /// While a video is open the content runs under the title bar, edge to edge (SwiftUI's window has full-size
-  /// content; ContentView clears the toolbar's background), and in a window the title bar fades out and in with
-  /// the controls. In full screen the title bar is clear and AppKit shows it on hover at the top of the screen.
+  /// content; ContentView clears the toolbar's background), and the title bar fades out and in with the controls:
+  /// in a window and in full screen, where SwiftUI keeps the toolbar showing at the top of the screen.
   /// Called when a video opens or closes, the window enters or leaves full screen, and the controls hide or show.
   func applyWindowChrome() {
     guard let window else { return }
     window.titlebarAppearsTransparent = isFullScreen
     if isFullScreen { window.styleMask.insert(.fullSizeContentView) }
     guard let titlebar = Self.titlebarContainer(of: window) else { return }
-    let alpha: CGFloat = !isFullScreen && player?.fileName != nil && controlsHidden ? 0 : 1
+    let alpha: CGFloat = player?.fileName != nil && !controlsVisible ? 0 : 1
     guard titlebar.alphaValue != alpha else { return }
     NSAnimationContext.runAnimationGroup { context in
       context.duration = 0.25
