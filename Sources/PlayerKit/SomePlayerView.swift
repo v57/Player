@@ -38,8 +38,12 @@ public final class MediaMetalView: NSView, VideoFrameSink {
   private let metalLayer = CAMetalLayer()
   private var renderer: MediaMetalRenderer?
   private var currentFrame: NativeVideoFrame?
-  /// Subtitle overlay (SRT Phase A): CATextLayer above the video.
+  /// Subtitle overlay (SRT Phase A): white text above the video, no box. The text layer's shadow is a tight dark
+  /// edge and the halo's a soft spread around it, so the cue reads on any frame (as the timeline's times do).
   private let subtitleLayer = CATextLayer()
+  private let subtitleHalo = CALayer()
+  /// The cue on screen, without markup; nil while none is.
+  private var subtitleText: String?
   /// The boxed player (set by the SwiftUI wrapper) for key/click transport.
   weak var player: SomePlayerBox?
   /// One-shot warnings: a frame arrived but nothing could render it.
@@ -95,15 +99,21 @@ public final class MediaMetalView: NSView, VideoFrameSink {
 
   private func setupSubtitleLayer() {
     subtitleLayer.string = nil
+    subtitleLayer.isWrapped = true
     subtitleLayer.alignmentMode = .center
-    subtitleLayer.foregroundColor = NSColor.white.cgColor
-    subtitleLayer.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
-    subtitleLayer.cornerRadius = 6
-    subtitleLayer.isHidden = true
     subtitleLayer.contentsScale = 2.0
-    subtitleLayer.fontSize = 18
+    subtitleLayer.shadowColor = NSColor.black.cgColor
+    subtitleLayer.shadowOpacity = 1
+    subtitleLayer.shadowRadius = 1
+    subtitleLayer.shadowOffset = .zero
+    subtitleHalo.shadowColor = NSColor.black.cgColor
+    subtitleHalo.shadowOpacity = 0.6
+    subtitleHalo.shadowRadius = 4
+    subtitleHalo.shadowOffset = CGSize(width: 0, height: -1)
+    subtitleHalo.isHidden = true
+    subtitleHalo.addSublayer(subtitleLayer)
     // Add above the video layer.
-    metalLayer.addSublayer(subtitleLayer)
+    metalLayer.addSublayer(subtitleHalo)
   }
 
   /// VideoFrameSink — MainActor, called by the controller.
@@ -122,33 +132,48 @@ public final class MediaMetalView: NSView, VideoFrameSink {
     // keeps its last presented drawable (frozen frame) until the next
     // file presents.
     currentFrame = nil
-    subtitleLayer.string = nil
-    subtitleLayer.isHidden = true
+    showSubtitle(nil)
   }
 
   /// Reads the active subtitle cue from the native engine and updates the
   /// overlay. Called on every presented frame (MainActor).
   private func updateSubtitleOverlay() {
     guard let cue = (player?.engine as? NativeSomePlayer)?.activeSubtitleCue, !cue.isEmpty else {
-      if !subtitleLayer.isHidden {
-        subtitleLayer.string = nil
-        subtitleLayer.isHidden = true
-      }
+      showSubtitle(nil)
       return
     }
     // SRT markup: strip <i>, <b>, <font> tags for Phase A plain rendering.
-    let plain = cue.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-    subtitleLayer.string = plain
-    subtitleLayer.isHidden = false
-    // Re-position: bottom-centered, sized to the layer.
+    showSubtitle(cue.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression))
+  }
+
+  private func showSubtitle(_ text: String?) {
+    guard text != subtitleText else { return }
+    subtitleText = text
+    subtitleHalo.isHidden = text == nil
     layoutSubtitleLayer()
   }
 
+  /// Bottom-centered, clear of the timeline: wrapped at 80% of the width, in semibold that grows with the view
+  /// (18pt in a small window). The layer's origin is bottom-left.
   private func layoutSubtitleLayer() {
-    let w = max(bounds.width * 0.8, 200)
-    let h: CGFloat = 40
-    subtitleLayer.frame = CGRect(
-      x: (bounds.width - w) / 2, y: bounds.height - 90, width: w, height: h)
+    guard let subtitleText else { return }
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    defer { CATransaction.commit() }
+    let text = NSAttributedString(
+      string: subtitleText,
+      attributes: [
+        .font: NSFont.systemFont(ofSize: max(18, (bounds.height * 0.04).rounded()), weight: .semibold),
+        .foregroundColor: NSColor.white,
+      ])
+    let width = max(bounds.width * 0.8, 200)
+    let height = text.boundingRect(
+      with: CGSize(width: width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading]
+    ).height.rounded(.up) + 2
+    subtitleLayer.string = text
+    subtitleLayer.contentsScale = window?.backingScaleFactor ?? 2.0
+    subtitleHalo.frame = CGRect(x: (bounds.width - width) / 2, y: 56, width: width, height: height)
+    subtitleLayer.frame = subtitleHalo.bounds
   }
 
   public override func layout() {

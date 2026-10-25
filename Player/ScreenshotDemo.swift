@@ -8,6 +8,7 @@ import PlayerKit
 ///
 ///   --screenshot-demo        the demo
 ///   --open <file>            opens a video
+///   --subtitle <stream>      then shows that subtitle stream
 ///   --seek <seconds>         then seeks there
 ///   --pause                  then pauses, so the picture holds still with the controls up
 ///   --recents <folder>       lists the folder's videos as played over the last days (the welcome's recent videos)
@@ -59,6 +60,7 @@ enum ScreenshotDemo {
     // Each step waits for the engine, so the scene is on screen when this returns: no settling delay needed.
     try? await player.open(URL(fileURLWithPath: path))
     await waitUntil { player.isPlaying }
+    if let stream = value("--subtitle").flatMap(Int.init) { player.selectSubtitleTrack(stream) }
     if let seconds = value("--seek").flatMap(Double.init) {
       player.seek(to: seconds, exact: true)
       // The clock passes the target once the seek's first frames are showing.
