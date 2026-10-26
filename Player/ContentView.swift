@@ -265,7 +265,6 @@ private struct ErrorSheet: View {
     KitSheet(title: "Couldn’t Play the Video", systemImage: "exclamationmark.triangle", hue: .red) {
       Text(message).kitFont(.body).fixedSize(horizontal: false, vertical: true)
     } footer: {
-      Spacer()
       Button("OK") { dismiss() }.buttonStyle(.kitPrimary).keyboardShortcut(.defaultAction)
     }
   }
