@@ -39,7 +39,7 @@ struct ContentView: View {
         // waiting for it to grow and will retry. Shown while that wait is
         // active, in the top-leading corner above the video.
         if player.isWaitingForFileUpdate { waitingBadge }
-      }.background { WindowReader { uiState.attach(to: $0) } }
+      }.background { windowReader }
       .kitDropTarget(isDropTargeted, cornerRadius: KitMetrics.radiusWindow)
       .overlay { if isDropTargeted { dropTargetLabel } }.onHover { uiState.hovering = $0 }
       .animation(.kit, value: uiState.hovering).animation(.kit, value: uiState.controlsHidden)
@@ -57,25 +57,8 @@ struct ContentView: View {
       .kitHidesSystemTitle(player.fileName != nil)
       // The video runs under the title bar (PlayerUIState.applyWindowChrome).
       .toolbarBackground(player.fileName != nil ? .hidden : .automatic, for: .windowToolbar)
-      .onReceive(
-        NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)
-      ) { note in
-        guard let window = note.object as? NSWindow else { return }
-        uiState.install(in: window)
-      }.onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) {
-        note in
-        guard let window = note.object as? NSWindow else { return }
-        if let appWindow = NSApp.keyWindow, appWindow === window { return }
-        uiState.removeEventMonitor()
-      }.onReceive(
-        NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)
-      ) { _ in
-        // Edge-to-edge video under the title bar, which only appears on hover at the top of the screen.
-        uiState.fullScreenChanged(true)
-      }.onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification))
-    { _ in
-      uiState.fullScreenChanged(false)
-    }.onChange(of: player.fileName != nil) {
+      .modifier(WindowEvents(uiState: uiState))
+      .onChange(of: player.fileName != nil) {
       uiState.applyWindowChrome()
     }.fileImporter(
       isPresented: Binding(
@@ -186,7 +169,7 @@ struct ContentView: View {
   /// folder dropped on the player shouldn't silently vanish; surface it
   /// through the existing error alert instead.
   private func openDropped(_ url: URL) {
-    guard NativeSomePlayer.isSupportedFile(url) else {
+    guard MediaFiles.isSupported(url) else {
       player.errorMessage =
         "\"\(url.lastPathComponent)\" is not a supported video file (MKV, MP4 or MOV only)."
       return
@@ -234,6 +217,46 @@ extension UTType {
   static var playableMovies: [UTType] { [.mkv, .mpeg4Movie, .quickTimeMovie] }
 }
 
+extension ContentView {
+  /// The window the view is in, for the title bar (macOS).
+  @ViewBuilder fileprivate var windowReader: some View {
+    #if os(macOS)
+      WindowReader { uiState.attach(to: $0) }
+    #endif
+  }
+}
+
+/// The window's key, full-screen and resign events, for the auto-hide monitors and the title bar (macOS); elsewhere
+/// the pointer and the transport keys.
+private struct WindowEvents: ViewModifier {
+  let uiState: PlayerUIState
+
+  func body(content: Content) -> some View {
+    #if os(macOS)
+      content.onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
+        guard let window = note.object as? NSWindow else { return }
+        uiState.install(in: window)
+      }.onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { note in
+        guard let window = note.object as? NSWindow else { return }
+        if let appWindow = NSApp.keyWindow, appWindow === window { return }
+        uiState.removeEventMonitor()
+      }.onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in
+        // Edge-to-edge video under the title bar, which only appears on hover at the top of the screen.
+        uiState.fullScreenChanged(true)
+      }.onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
+        uiState.fullScreenChanged(false)
+      }
+    #else
+      // No window monitors here: pointer moves and transport keys reach the view.
+      content.onContinuousHover { _ in uiState.noteInteraction() }
+        .onKeyPress(keys: [.space, .return, .leftArrow, .rightArrow]) { press in
+          uiState.handleTransportKey(press.key) ? .handled : .ignored
+        }
+    #endif
+  }
+}
+
+#if os(macOS)
 /// Reports the window the view is in, once it's in one.
 private struct WindowReader: NSViewRepresentable {
   let onWindow: (NSWindow) -> Void
@@ -255,6 +278,7 @@ private struct WindowReader: NSViewRepresentable {
     }
   }
 }
+#endif
 
 /// The engine's error, as a kit sheet: what went wrong and OK.
 private struct ErrorSheet: View {

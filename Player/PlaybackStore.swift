@@ -224,7 +224,7 @@ import SwiftData
     guard ScreenshotDemo.isOn else { return }
     let files = ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
       .map { folder.appendingPathComponent($0) }
-      .filter { NativeSomePlayer.isSupportedFile($0) }
+      .filter { MediaFiles.isSupported($0) }
       .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
     for (index, file) in files.enumerated() {
       let duration = Double(600 + index * 1_337 % 5_400)

@@ -1,3 +1,5 @@
+// macOS only: AppKit.
+#if os(macOS)
 import AppKit
 
 /// Keeps the app dark, and closes it when its last window is closed (standard macOS behavior).
@@ -18,3 +20,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     true
   }
 }
+#endif

@@ -55,7 +55,7 @@ import VaultKit
       let listed = try await client.list(folder)
       entries = listed.filter {
         !$0.name.hasPrefix(".")
-          && ($0.isDirectory || NativeSomePlayer.isSupportedFile(URL(fileURLWithPath: $0.name)))
+          && ($0.isDirectory || MediaFiles.isSupported(URL(fileURLWithPath: $0.name)))
       }
       .sorted { ($0.isDirectory ? 0 : 1, $0.name.localizedLowercase) < ($1.isDirectory ? 0 : 1, $1.name.localizedLowercase) }
       place = Place(hostID: hostID, path: folder)

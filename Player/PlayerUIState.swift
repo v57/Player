@@ -1,7 +1,10 @@
-import AppKit
+#if os(macOS)
+  import AppKit
+#endif
 import Combine
 import Foundation
 import PlayerKit
+import SwiftUI
 
 /// Pure UI state that doesn't belong on the playback protocol. Owned by the
 /// App and injected alongside the player box, so both ContentView and the
@@ -54,11 +57,13 @@ import PlayerKit
   init(player: SomePlayerBox? = nil) { self.player = player }
 
   private var idleTimer: Timer?
+  private var isFullScreen = false
+
+  #if os(macOS)
   /// Local event monitor: sees every event routed to this window (mouse,
   /// key, scroll), regardless of first responder — the only hook that can
   /// drive both the overlay hide and the fullscreen cursor hide together.
   private var eventMonitor: Any?
-  private var isFullScreen = false
   /// The player's window, for its title bar.
   private weak var window: NSWindow?
 
@@ -71,7 +76,7 @@ import PlayerKit
       .mouseMoved, .leftMouseDragged, .rightMouseDragged, .leftMouseDown, .rightMouseDown,
       .scrollWheel, .keyDown, .keyUp,
     ]) { [weak self] event in
-      self?.noteInteraction(event: event)
+      self?.noteInteraction()
       return event
     }
     eventMonitor = monitor
@@ -169,6 +174,23 @@ import PlayerKit
     }
   }
 
+  #endif
+
+  /// Transport keys where no window monitor sees them (off macOS): Space and Return play and pause, the arrows
+  /// seek 5 s. Returns whether the key was one.
+  func handleTransportKey(_ key: KeyEquivalent) -> Bool {
+    guard let player, player.fileName != nil else { return false }
+    switch key {
+    case .space, .return:
+      if player.isPlaying { player.pause() } else { player.play() }
+    case .leftArrow: player.seekRelative(-5)
+    case .rightArrow: player.seekRelative(5)
+    default: return false
+    }
+    noteInteraction()
+    return true
+  }
+
   func fullScreenChanged(_ entered: Bool) {
     isFullScreen = entered
     applyWindowChrome()
@@ -179,6 +201,7 @@ import PlayerKit
 
   // MARK: - Title bar
 
+  #if os(macOS)
   /// The window the player's view is in: from the moment the view is in it, before the window is ever key.
   func attach(to window: NSWindow) {
     self.window = window
@@ -211,13 +234,17 @@ import PlayerKit
     }
     return view
   }
+  #else
+  /// The title bar stays (off macOS the video doesn't run under it).
+  func applyWindowChrome() {}
+  #endif
 
   // MARK: - Auto-hide
 
   /// Called on every pointer/keyboard event delivered to the app: re-shows
   /// the controls and restarts the idle timer that hides them (and the
   /// cursor in fullscreen) while playing.
-  func noteInteraction(event: NSEvent? = nil) {
+  func noteInteraction() {
     // NOTE: a LOCAL event monitor only ever sees THIS app's events, so a
     // mouseMoved with `event.window == nil` is not "another app" — it is
     // exactly the system menu / menu-bar tracking case (the menu runs in a
@@ -287,11 +314,15 @@ import PlayerKit
   private func setCursorHidden(_ hidden: Bool) {
     if hidden {
       cursorHidden = true
-      NSCursor.setHiddenUntilMouseMoves(true)
+      #if os(macOS)
+        NSCursor.setHiddenUntilMouseMoves(true)
+      #endif
     } else {
       guard cursorHidden else { return }
       cursorHidden = false
-      NSCursor.setHiddenUntilMouseMoves(false)
+      #if os(macOS)
+        NSCursor.setHiddenUntilMouseMoves(false)
+      #endif
     }
   }
 }

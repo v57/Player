@@ -4,8 +4,10 @@ import SwiftUI
 import UpdateKit
 
 @main struct PlayerApp: App {
-  /// Quit the app when its last window closes (standard macOS behavior).
-  @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+  #if os(macOS)
+    /// Quit the app when its last window closes (standard macOS behavior).
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+  #endif
 
   /// The concrete SomePlayerBox wraps the native engine; views observe the
   /// box (an existential cannot be an @EnvironmentObject — probed, see
@@ -29,14 +31,16 @@ import UpdateKit
   /// app never becomes the Now Playing app and the keys keep going to Music.
   private let nowPlaying: NowPlayingController?
 
-  /// Test-harness window/app trace + optional minimize (PLAYER_TRACE_WINDOW).
-  private let trace: TestTrace
+  #if os(macOS)
+    /// Test-harness window/app trace + optional minimize (PLAYER_TRACE_WINDOW).
+    private let trace: TestTrace
 
-  /// Input shield: consumes every keyboard/mouse event delivered to this app
-  /// (PLAYER_IGNORE_INPUT=1) so the machine's user cannot drive the run. Must be
-  /// created AFTER `trace` — local monitors run in registration order, so the
-  /// trace gets to record the attempt before the event is swallowed.
-  private let inputShield: InputShield
+    /// Input shield: consumes every keyboard/mouse event delivered to this app
+    /// (PLAYER_IGNORE_INPUT=1) so the machine's user cannot drive the run. Must be
+    /// created AFTER `trace` — local monitors run in registration order, so the
+    /// trace gets to record the attempt before the event is swallowed.
+    private let inputShield: InputShield
+  #endif
 
   /// Updates from GitHub Releases (Player.zip, built by
   /// Tests/Scripts/release-macos.sh): checked daily once the user turns
@@ -47,11 +51,10 @@ import UpdateKit
   static let accent = Color(red: 1, green: 0x3b / 255, blue: 0x30 / 255)
 
   init() {
-    let box = SomePlayerBox(engine: NativeSomePlayer())
-    // Inject the SwiftData-backed store into the engine's persistence
-    // seam (the library never touches SwiftData itself).
-    if let engine = box.engine as? NativeSomePlayer {
-      engine.store = PlaybackStore.shared
+    // The platform's engine, with the SwiftData-backed store injected into its
+    // persistence seam (the library never touches SwiftData itself).
+    let box = SomePlayerBox.makeDefault(store: PlaybackStore.shared)
+    do {
       // Restore the user's dialogue-enhancement mode (UserDefaults; the
       // engine stays idle, so the value is stashed and applied at setup).
       // PLAYER_ENHANCEMENT_MODE overrides it for headless verification
@@ -63,17 +66,19 @@ import UpdateKit
           AudioEnhancementMode.init(rawValue:)) ?? restored
       NSLog(
         "[App] enhancement mode at launch: %@ (defaults %@)", effective.rawValue, restored.rawValue)
-      engine.enhancementMode = effective
-      engine.normalizesLoudness = AudioEnhancementPreferences.normalizesLoudness
+      box.enhancementMode = effective
+      box.normalizesLoudness = AudioEnhancementPreferences.normalizesLoudness
     }
     _player = StateObject(wrappedValue: box)
     _uiState = StateObject(wrappedValue: PlayerUIState(player: box))
-    // Trace first, then the input shield, so a blocked event is still logged.
-    let trace = TestTrace()
-    let shield = InputShield()
-    trace.shield = shield
-    self.trace = trace
-    self.inputShield = shield
+    #if os(macOS)
+      // Trace first, then the input shield, so a blocked event is still logged.
+      let trace = TestTrace()
+      let shield = InputShield()
+      trace.shield = shield
+      self.trace = trace
+      self.inputShield = shield
+    #endif
     // Wire the media keys / Now Playing integration. Weak-holds the box.
     if ProcessInfo.processInfo.environment["PLAYER_NO_MEDIA_KEYS"] == "1" {
       nowPlaying = nil
@@ -88,7 +93,19 @@ import UpdateKit
     WindowGroup {
       ContentView().environmentObject(player).environmentObject(uiState)
       .componentKit(accent: Self.accent)
-      .task { await ScreenshotDemo.start(player: player, ui: uiState) }
+      .task {
+        #if !os(macOS)
+          // Linux desktops open a file with the app by passing its path (a .desktop entry's `Player %f`).
+          if !ScreenshotDemo.isOn,
+            let path = CommandLine.arguments.dropFirst().first(where: {
+              !$0.hasPrefix("-") && MediaFiles.isSupported(URL(fileURLWithPath: $0))
+            })
+          {
+            try? await player.open(URL(fileURLWithPath: path))
+          }
+        #endif
+        await ScreenshotDemo.start(player: player, ui: uiState)
+      }
       .frame(
         minWidth: 800, minHeight: 500
       )

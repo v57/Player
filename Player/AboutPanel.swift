@@ -1,3 +1,5 @@
+// macOS only: AppKit.
+#if os(macOS)
 import AppKit
 import PlayerKit
 
@@ -60,3 +62,4 @@ enum AboutPanel {
     return text
   }
 }
+#endif

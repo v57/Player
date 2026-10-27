@@ -1,3 +1,5 @@
+// macOS only: AppKit.
+#if os(macOS)
 import AppKit
 
 /// Input shield for headless playback runs (`PLAYER_IGNORE_INPUT=1`).
@@ -60,3 +62,4 @@ final class InputShield {
     if let monitor { NSEvent.removeMonitor(monitor) }
   }
 }
+#endif

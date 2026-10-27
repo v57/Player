@@ -1,3 +1,5 @@
+// macOS only: AppKit.
+#if os(macOS)
 import AppKit
 
 /// Test-harness trace: window/app activity, visibility and user interaction.
@@ -127,3 +129,4 @@ final class TestTrace {
     NSLog("[Trace] t=%.3f %@", CACurrentMediaTime() - start, message)
   }
 }
+#endif
