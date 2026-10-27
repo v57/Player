@@ -121,19 +121,76 @@ import SwiftData
     return pos
   }
 
+  /// The record for `path`. A finished download in `~/Downloads` with no record of its own takes the one it had
+  /// while Get was still downloading it in `~/Downloads/Downloading`, so its resume point carries over.
   func fetchRecord(path: String) -> PlaybackRecord? {
+    if let record = record(path: path) { return record }
+    guard let staged = Self.stagedDownloadPath(for: path), !FileManager.default.fileExists(atPath: staged),
+      let record = record(path: staged)
+    else { return nil }
+    record.filePath = path
+    try? modelContext.save()
+    return record
+  }
+
+  private func record(path: String) -> PlaybackRecord? {
     let descriptor = FetchDescriptor<PlaybackRecord>(predicate: #Predicate { $0.filePath == path })
     return try? modelContext.fetch(descriptor).first
   }
 
   /// The `limit` most recently played files, newest first — used for the
   /// empty-state "Recent" list. Only records the user has really watched
-  /// (position > 0) are shown.
+  /// (position > 0) are shown. A file played while Get was still downloading
+  /// it is followed to `~/Downloads`, where Get moved it when it finished.
   func recentVideos(limit: Int = 5) -> [PlaybackRecord] {
     var descriptor = FetchDescriptor<PlaybackRecord>(predicate: #Predicate { $0.position > 0 })
     descriptor.sortBy = [SortDescriptor(\PlaybackRecord.lastPlayedAt, order: .reverse)]
     descriptor.fetchLimit = limit
+    let records = (try? modelContext.fetch(descriptor)) ?? []
+    guard !records.filter(followFinishedDownload).isEmpty else { return records }
+    try? modelContext.save()
     return (try? modelContext.fetch(descriptor)) ?? []
+  }
+
+  // MARK: - Finished downloads
+
+  /// `~/Downloads/`, where Get puts finished downloads.
+  private static let downloadsPrefix = URL.downloadsDirectory.path + "/"
+  /// `~/Downloads/Downloading/`, where Get keeps a download while it runs, then moves it to `~/Downloads` under the
+  /// same name (a torrent's folder keeps its files' paths).
+  private static let stagingPrefix = downloadsPrefix + "Downloading/"
+
+  /// Where a file in Get's staging folder ends up once its download finished.
+  private static func finishedDownloadPath(for path: String) -> String? {
+    guard path.hasPrefix(stagingPrefix) else { return nil }
+    return downloadsPrefix + path.dropFirst(stagingPrefix.count)
+  }
+
+  /// Where a file in `~/Downloads` was while Get was downloading it.
+  private static func stagedDownloadPath(for path: String) -> String? {
+    guard path.hasPrefix(downloadsPrefix), !path.hasPrefix(stagingPrefix) else { return nil }
+    return stagingPrefix + path.dropFirst(downloadsPrefix.count)
+  }
+
+  /// Moves the record of a file that's gone from Get's staging folder to the finished download in `~/Downloads`,
+  /// merging it into that file's own record when it has one (the newer play wins). False when the file isn't one.
+  private func followFinishedDownload(_ record: PlaybackRecord) -> Bool {
+    let fileManager = FileManager.default
+    guard let finished = Self.finishedDownloadPath(for: record.filePath),
+      !fileManager.fileExists(atPath: record.filePath), fileManager.fileExists(atPath: finished)
+    else { return false }
+    guard let existing = self.record(path: finished) else {
+      record.filePath = finished
+      return true
+    }
+    if record.lastPlayedAt > existing.lastPlayedAt {
+      existing.position = record.position
+      existing.duration = record.duration
+      existing.lastPlayedAt = record.lastPlayedAt
+    }
+    if existing.bookmarkData == nil { existing.bookmarkData = record.bookmarkData }
+    modelContext.delete(record)
+    return true
   }
 
   /// Persists (updates) the security-scoped bookmark for a file so it can be
