@@ -90,7 +90,7 @@ struct ContentView: View {
       emptyTitle: "No Recent Videos",
       emptyMessage: "Open an MKV, MP4 or MOV file, or drop one on this window. Videos you play show up here."
     ) {
-      WelcomeAction("Open…", detail: "An MKV, MP4 or MOV file on this Mac", systemImage: "folder") {
+      WelcomeAction("Open…", detail: "An MKV, MP4 or MOV file on this \(KitDevice.nameInSentence)", systemImage: "folder") {
         uiState.showFileImporter = true
       }
       WelcomeAction(
