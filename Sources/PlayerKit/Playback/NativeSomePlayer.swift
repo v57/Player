@@ -239,11 +239,9 @@ import PlayerCDemux
   /// Matroska and MP4/QuickTime demuxers. Shared with the app (document types,
   /// file importer, drag & drop) and used to pick siblings for the
   /// Next/Previous media keys.
-  public static let supportedFileExtensions: Set<String> = ["mkv", "mp4", "m4v", "mov"]
+  public static var supportedFileExtensions: Set<String> { MediaFiles.supportedExtensions }
 
-  public static func isSupportedFile(_ url: URL) -> Bool {
-    supportedFileExtensions.contains(url.pathExtension.lowercased())
-  }
+  public static func isSupportedFile(_ url: URL) -> Bool { MediaFiles.isSupported(url) }
 
   /// Moves to the next/previous sibling of the current file (sorted by
   /// filename, localized, wrapping around). The sibling is opened through
@@ -258,13 +256,7 @@ import PlayerCDemux
     let dir = current.deletingLastPathComponent()
     let files: [URL]
     do {
-      files =
-        try FileManager.default.contentsOfDirectory(
-          at: dir, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]
-        ).filter { Self.isSupportedFile($0) }
-        .sorted {
-          $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
-        }
+      files = try MediaFiles.siblings(of: current)
     } catch {
       NSLog("[Native] next/previous: cannot enumerate %@ — %@", dir.path, error.localizedDescription)
       return

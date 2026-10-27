@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 
 /// How subtitles draw: the text's size in points (the same in any window size), how wide the lines run before they
 /// wrap, and where they sit across the bottom of the video.
