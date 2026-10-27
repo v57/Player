@@ -93,6 +93,8 @@ import UpdateKit
     WindowGroup {
       ContentView().environmentObject(player).environmentObject(uiState)
       .componentKit(accent: Self.accent)
+      // Always dark, as AppDelegate keeps the Mac app (Linux has no app delegate).
+      .preferredColorScheme(.dark)
       .task {
         #if !os(macOS)
           // Linux desktops open a file with the app by passing its path (a .desktop entry's `Player %f`).
