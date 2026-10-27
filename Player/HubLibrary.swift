@@ -4,9 +4,10 @@ import PlayerKit
 import SSHTunnel
 import VaultKit
 
-/// Another device's videos: the user's Hub devices (the hosts via Hub the Vault app keeps), browsed over SFTP and
+/// Another device's videos: an account's Hub devices (the hosts via Hub its vault keeps), browsed over SFTP and
 /// played as they're read (`SFTPMediaSource`), signed in with this device's key (the Secure Enclave key every v57
-/// app shares) or the host's saved password. Nothing is copied to this Mac.
+/// app shares) or the host's saved password. Nothing is copied to this Mac. A stream keeps the login it was opened
+/// with, so it stays on its account's host whatever the sheet shows next.
 @MainActor final class HubLibrary: ObservableObject {
   /// A folder on a device, being browsed.
   struct Place: Equatable {
@@ -24,19 +25,22 @@ import VaultKit
   private var playing: URL?
   /// The screenshots' devices, in place of the vault's (`--hub-library`).
   private var demoHosts: [VaultHost]?
+  /// The vault of the account whose devices are shown: their hosts, passwords' ids and known host keys.
+  let vault: Vault
 
-  init() {
+  init(vault: Vault) {
+    self.vault = vault
     if let page = ScreenshotDemo.hubLibraryPage { showDemo(page) }
   }
 
   /// The devices to offer, by name.
   var hosts: [VaultHost] {
-    (demoHosts ?? Vault.shared.hubHosts)
+    (demoHosts ?? vault.hubHosts)
       .sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
   }
 
   func host(id: String) -> VaultHost? {
-    demoHosts.map { $0.first { $0.id == id } } ?? Vault.shared.host(id: id)
+    demoHosts.map { $0.first { $0.id == id } } ?? vault.host(id: id)
   }
 
   /// Shows a folder on a device: its home folder when `path` is nil. Lists folders and the videos Player plays.
@@ -115,19 +119,19 @@ import VaultKit
   /// One SFTP login per device, kept while it works.
   private func client(for host: VaultHost) async throws -> SFTPClient {
     if let client = clients[host.id], client.isAlive { return client }
-    let server = try Self.server(for: host)
+    let server = try Self.server(for: host, in: vault)
     let client = try await SFTPClient.connect(server: server)
     // Trust on first use, as Shell and Database do; a Hub device's signed key is trusted ahead of time by Vault.
     if server.knownFingerprint == nil {
-      try? Vault.shared.store?.trust(fingerprint: client.hostKeyFingerprint, host: host.hostname, port: host.port)
+      try? vault.store?.trust(fingerprint: client.hostKeyFingerprint, host: host.hostname, port: host.port)
     }
     clients[host.id] = client
     return client
   }
 
   /// How Player logs in to the host: its user, this device's key or the saved password, the trusted host key.
-  static func server(for host: VaultHost) throws -> SSHServer {
-    let known = try? Vault.shared.store?.knownFingerprint(host: host.hostname, port: host.port)
+  static func server(for host: VaultHost, in vault: Vault) throws -> SSHServer {
+    let known = try? vault.store?.knownFingerprint(host: host.hostname, port: host.port)
     let user = host.user.isEmpty ? NSUserName() : host.user
     if host.auth == .password {
       return SSHServer(

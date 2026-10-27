@@ -3,12 +3,29 @@ import PlayerKit
 import SSHTunnel
 import SwiftUI
 import VaultKit
+import VaultUI
 
-/// Open from Device: the user's Hub devices, then a device's folders and videos; picking a video plays it from there.
+/// Open from Device: the Hub devices of one account (picked in the Devices header), then a device's folders and
+/// videos; picking a video plays it from there.
 struct HubLibrarySheet: View {
+  /// The account whose devices the sheet shows, kept per window; Personal until another is picked.
+  @SceneStorage("openFromDevice.account") private var accountID = VaultAccount.personal.id
+
+  var body: some View {
+    // A library per account: switching it leaves the device being browsed.
+    VaultAccountScope(selection: $accountID) { vault in HubLibraryBrowser(vault: vault) }
+  }
+}
+
+/// The sheet for one account's devices.
+private struct HubLibraryBrowser: View {
   @EnvironmentObject private var player: SomePlayerBox
-  @StateObject private var library = HubLibrary()
+  @StateObject private var library: HubLibrary
   @Environment(\.kitDismiss) private var dismiss
+
+  init(vault: Vault) {
+    _library = StateObject(wrappedValue: HubLibrary(vault: vault))
+  }
 
   var body: some View {
     KitSheet(
@@ -43,6 +60,8 @@ struct HubLibrarySheet: View {
         SidebarRow(host.displayName, subtitle: host.hostname, systemImage: "desktopcomputer", hue: .indigo)
           .action { Task { await library.browse(hostID: host.id) } }
       }
+    } accessory: {
+      VaultAccountPicker(style: .compact)
     }
   }
 
