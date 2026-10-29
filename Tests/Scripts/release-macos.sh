@@ -55,20 +55,18 @@ echo "==> Player ${VERSION} (team ${TEAM_ID})"
 
 echo "==> archive"
 # arm64 only: the vendored FFmpeg dylibs are arm64 (the generic destination
-# would otherwise also build x86_64 and fail to link them). LTO and ld-archive-prelink
-# drop unused package code (Xcode's per-package `ld -r` would keep it).
-# actool-icon-slim stores the flattened pictures of an Icon Composer icon as
-# HEVC instead of lossless (Assets.car 1.7 MB -> 140 KB); Xcode reads a tool's
-# version under its file name (com.apple.actool.version), so the copy is named
-# actool.
-install -d "${OUT}/icon-slim"
-install -m 755 "${SCRIPT_DIR}/actool-icon-slim" "${OUT}/icon-slim/actool"
-xcodebuild -project "${SRC}/Player.xcodeproj" -scheme Player -configuration Release \
+# would otherwise also build x86_64 and fail to link them). xcodebuild-release
+# is xcodebuild with the release link every v57 app ships with (LTO,
+# ld-archive-prelink, actool-icon-slim: unused package code goes, the icon's
+# fallbacks as HEVC), from the Code checkout beside the main checkout
+# (RELEASE_TOOLS: another copy of Code's Sources/CodeActions/Release).
+MAIN_CHECKOUT="$(dirname "$(git -C "${REPO_ROOT}" rev-parse --path-format=absolute --git-common-dir)")"
+RELEASE="${RELEASE_TOOLS:-${MAIN_CHECKOUT}/../Code/Sources/CodeActions/Release}/xcodebuild-release"
+[[ -x "${RELEASE}" ]] \
+  || { echo "ERROR: xcodebuild-release not found at ${RELEASE} (RELEASE_TOOLS: Code's Sources/CodeActions/Release)" >&2; exit 1; }
+"${RELEASE}" -project "${SRC}/Player.xcodeproj" -scheme Player -configuration Release \
   -destination 'generic/platform=macOS' -archivePath "${OUT}/Player.xcarchive" \
   -derivedDataPath "${OUT}/DerivedData" ARCHS=arm64 \
-  SWIFT_LTO=YES ALTERNATE_LINKER_PATH="${SCRIPT_DIR}/ld-archive-prelink" \
-  ASSETCATALOG_EXEC="${OUT}/icon-slim/actool" \
-  'OTHER_SWIFT_FLAGS=$(inherited) -Xfrontend -internalize-at-link -Xfrontend -conditional-runtime-records' \
   archive -quiet
 
 echo "==> export (Developer ID)"
