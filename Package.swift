@@ -56,12 +56,8 @@ let package = Package(
 
 #if os(Linux)
 // Linux: PlayerKit plays through PlatformMedia (GStreamer) instead of the native engine (FFmpeg dylibs built for
-// macOS, VideoToolbox, Metal, AVAudioEngine), and the app is an executable on v57/SwiftUI's GTK backend built from
-// the Xcode app folder (SwiftUI's Linux/scripts/build-app stages it). The frameworks the app imports (SwiftData,
-// SQLite3, Combine) are v57/SwiftUI's stand-ins.
-package.dependencies += [
-  v57("SwiftUI"), v57("Component"), v57("UpdateKit"), v57("Dev"), v57("Vault"), v57("Database"),
-]
+// macOS, VideoToolbox, Metal, AVAudioEngine). The app is its own package in App/.
+package.dependencies += [v57("SwiftUI")]
 package.targets.removeAll { $0.name == "PlayerCDemux" || $0.name == "PlayerKitTests" }
 for target in package.targets where target.name == "PlayerKit" {
   target.dependencies = [
@@ -72,25 +68,4 @@ for target in package.targets where target.name == "PlayerKit" {
     "SomePlayerView.swift", "API/FFmpegLibrary.swift", "AudioEnhancement",
   ]
 }
-package.targets.append(
-  .executableTarget(
-    name: "PlayerApp",
-    dependencies: [
-      "PlayerKit", .product(name: "SwiftUI", package: "SwiftUI"), .product(name: "SwiftData", package: "SwiftUI"),
-      .product(name: "SQLite3", package: "SwiftUI"), .product(name: "ComponentKit", package: "Component"),
-      .product(name: "UpdateKit", package: "UpdateKit"), .product(name: "DevScreenshots", package: "Dev"),
-      .product(name: "VaultKit", package: "Vault"), .product(name: "VaultUI", package: "Vault"),
-      .product(name: "SSHTunnel", package: "Database"), .product(name: "PlatformMedia", package: "Platform"),
-    ],
-    path: "Player", exclude: ["Info.plist", "Player.entitlements", "AppIcon.icon"],
-    swiftSettings: [
-      .swiftLanguageMode(.v5), .defaultIsolation(MainActor.self), .enableUpcomingFeature("ApproachableConcurrency"),
-      .enableUpcomingFeature("MemberImportVisibility"),
-      // On Apple platforms `import Foundation` brings Combine (ObservableObject, @Published) and URLSession along.
-      .unsafeFlags(
-        ["Combine", "FoundationNetworking", "SwiftUIPortability"].flatMap {
-          ["-Xfrontend", "-import-module", "-Xfrontend", $0]
-        }),
-    ]))
-package.products.append(.executable(name: "Player", targets: ["PlayerApp"]))
 #endif

@@ -3,7 +3,8 @@ import PlayerKit
 import SwiftUI
 import UpdateKit
 
-@main struct PlayerApp: App {
+/// The app, all of it but its entry point (App/Sources/Player/PlayerMain.swift).
+public struct PlayerApp: App {
   #if os(macOS)
     /// Quit the app when its last window closes (standard macOS behavior).
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -50,7 +51,7 @@ import UpdateKit
   /// Player's red, the one colour the app picks.
   static let accent = Color(red: 1, green: 0x3b / 255, blue: 0x30 / 255)
 
-  init() {
+  public init() {
     // The platform's engine, with the SwiftData-backed store injected into its
     // persistence seam (the library never touches SwiftData itself).
     let box = SomePlayerBox.makeDefault(store: PlaybackStore.shared)
@@ -89,7 +90,7 @@ import UpdateKit
     updater.start()
   }
 
-  var body: some Scene {
+  public var body: some Scene {
     WindowGroup {
       ContentView().environmentObject(player).environmentObject(uiState)
       .componentKit(accent: Self.accent)

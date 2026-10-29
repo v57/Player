@@ -2,7 +2,7 @@
   "build": { "scheme": "Player", "project": "Player.xcodeproj" },
   "appearances": ["dark"],
   "variables": { "DEMO": "/tmp/PlayerDemo" },
-  "watch": ["Player", "Sources", "Tools/screenshots"],
+  "watch": ["App", "Sources", "Tools/screenshots"],
   "mac": { "window": [1440, 900] },
   "scenes": [
     {

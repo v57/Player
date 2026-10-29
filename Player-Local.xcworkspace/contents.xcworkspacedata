@@ -25,4 +25,7 @@
    <FileRef
       location = "group:../Platform">
    </FileRef>
+   <FileRef
+      location = "group:../Code">
+   </FileRef>
 </Workspace>

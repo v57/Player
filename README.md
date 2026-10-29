@@ -13,7 +13,8 @@ A native Mac video player for MKV and MP4, built on VideoToolbox and Metal.
 - Media keys and Now Playing.
 
 The engine is the `PlayerKit` library in this repository: FFmpeg demuxes, VideoToolbox decodes
-video, AVAudioEngine plays audio.
+video, AVAudioEngine plays audio. The app is its own package in `App/` (the `PlayerApp` library), which
+`Player.xcodeproj` builds into Player.app.
 
 ## Supported formats
 
@@ -41,6 +42,7 @@ macOS 14 or later on Apple silicon. The `PlayerKit` library supports macOS 12 or
 swift build
 swift test
 xcodebuild -project Player.xcodeproj -scheme Player -destination 'platform=macOS' build
+cd App && swift build --product Player       # Linux
 ```
 
 [UpdateKit](https://github.com/v57/UpdateKit) comes from GitHub's `main` branch. To work on both, clone it next to
