@@ -17,30 +17,27 @@ struct SubtitleStylePanel: View {
       hue: .indigo, width: 320
     ) {
       FormCard {
-        VStack(alignment: .leading, spacing: 14) {
-          field("Size", value: "\(Int(uiState.subtitleStyle.size)) pt") {
-            KitSlider(
-              "Size", value: $uiState.subtitleStyle.size, in: SubtitleStyle.sizes, step: 1,
-              format: { "\(Int($0)) pt" })
-          }
-          field("Width") {
-            KitSegmented(
-              selection: $uiState.subtitleStyle.width,
-              options: SubtitleStyle.Width.allCases.map { ($0.title, $0) }
-            )
-            .kitSegmentedStyle(.wide)
-          }
-          field("Alignment") {
-            KitSegmented(
-              selection: $uiState.subtitleStyle.alignment,
-              segments: SubtitleStyle.Alignment.allCases.map {
-                KitSegment($0.title, value: $0, systemImage: $0.systemImage)
-              }
-            )
-            .kitSegmentedStyle(.wide)
-          }
+        FormRow("Size", value: "\(Int(uiState.subtitleStyle.size)) pt") {
+          KitSlider(
+            "Size", value: $uiState.subtitleStyle.size, in: SubtitleStyle.sizes, step: 1,
+            format: { "\(Int($0)) pt" })
         }
-        .padding(12)
+        FormRow("Width") {
+          KitSegmented(
+            selection: $uiState.subtitleStyle.width,
+            options: SubtitleStyle.Width.allCases.map { ($0.title, $0) }
+          )
+          .kitSegmentedStyle(.wide)
+        }
+        FormRow("Alignment") {
+          KitSegmented(
+            selection: $uiState.subtitleStyle.alignment,
+            segments: SubtitleStyle.Alignment.allCases.map {
+              KitSegment($0.title, value: $0, systemImage: $0.systemImage)
+            }
+          )
+          .kitSegmentedStyle(.wide)
+        }
       }
     } footer: {
       Button("Apply") {
@@ -51,19 +48,5 @@ struct SubtitleStylePanel: View {
     }
     // The kit overlays' card, without the dim: the video keeps playing beside it.
     .kitOverlayCard()
-  }
-
-  /// A labelled control: the label (and its value at the end) over the control, full width.
-  private func field<Control: View>(_ title: String, value: String? = nil, @ViewBuilder control: () -> Control)
-    -> some View
-  {
-    VStack(alignment: .leading, spacing: 8) {
-      HStack {
-        Text(title).kitFont(.headline)
-        Spacer()
-        if let value { Text(value).kitFont(.callout).monospacedDigit().foregroundStyle(.kitSecondary) }
-      }
-      control()
-    }
   }
 }
