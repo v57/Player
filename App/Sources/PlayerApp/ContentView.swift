@@ -40,11 +40,13 @@ struct ContentView: View {
         // active, in the top-leading corner above the video.
         if player.isWaitingForFileUpdate { waitingBadge }
       }.background { windowReader }
-      .kitDropTarget(isDropTargeted, cornerRadius: KitMetrics.radiusWindow)
-      .overlay { if isDropTargeted { dropTargetLabel } }.onHover { uiState.hovering = $0 }
+      .kitDropTarget(
+        isDropTargeted, label: "Drop to Play", systemImage: "play.fill", cornerRadius: KitMetrics.radiusWindow
+      )
+      .onHover { uiState.hovering = $0 }
       .animation(.kit, value: uiState.hovering).animation(.kit, value: uiState.controlsHidden)
       .animation(.kit, value: player.isPlaying).animation(.kit, value: player.isWaitingForFileUpdate)
-      .animation(.kitFast, value: isDropTargeted).animation(.kit, value: uiState.showSubtitleStyle)
+      .animation(.kit, value: uiState.showSubtitleStyle)
       .navigationTitle(player.fileName ?? "Player")
       .toolbar {
         // The open video's rich title replaces the window's own.
@@ -70,9 +72,7 @@ struct ContentView: View {
       }
     }.kitSheet(isPresented: Binding(get: { uiState.showHubLibrary }, set: { uiState.showHubLibrary = $0 })) {
       HubLibrarySheet()
-    }.kitSheet(isPresented: errorBinding) {
-      ErrorSheet(message: player.errorMessage ?? "")
-    }
+    }.kitNotice("Couldn’t Play the Video", message: $player.errorMessage, hue: .red)
   }
   /// The native engine's video surface: a Metal sink the player pushes
   /// decoded frames into. Cursor auto-hide in fullscreen is owned by
@@ -180,31 +180,10 @@ struct ContentView: View {
   /// Shown in the top-leading corner while the engine waits for a still-downloading file to grow: the wait lives in
   /// the live icon's work indicator.
   private var waitingBadge: some View {
-    HStack(spacing: 8) {
-      LiveIcon(systemImage: "arrow.down", hue: .orange, status: .working(), size: 20)
-      Text("Waiting for the download").kitFont(.callout)
-    }
-    .padding(.leading, 6)
-    .padding(.trailing, 12)
-    .padding(.vertical, 6)
-    .kitSurface(.floating, cornerRadius: KitMetrics.radiusCard)
-    .environment(\.colorScheme, .dark)
-    .padding(KitMetrics.gutter * 2)
-    .transition(.opacity)
-  }
-
-  /// The label in the middle of the window while a file drag hovers over it (the window wears the kit's drop ring).
-  private var dropTargetLabel: some View {
-    Label("Drop to Play", systemImage: "play.fill")
-      .kitFont(.headline)
-      .padding(.horizontal, 14)
-      .padding(.vertical, 10)
-      .kitSurface(.floating, cornerRadius: KitMetrics.radiusCard)
-      .allowsHitTesting(false)
+    KitStatusPill("Waiting for the download", systemImage: "arrow.down", hue: .orange, status: .working())
+      .environment(\.colorScheme, .dark)
+      .padding(KitMetrics.gutter * 2)
       .transition(.opacity)
-  }
-  private var errorBinding: Binding<Bool> {
-    Binding(get: { player.errorMessage != nil }, set: { if !$0 { player.errorMessage = nil } })
   }
 }
 
@@ -279,17 +258,3 @@ private struct WindowReader: NSViewRepresentable {
   }
 }
 #endif
-
-/// The engine's error, as a kit sheet: what went wrong and OK.
-private struct ErrorSheet: View {
-  let message: String
-  @Environment(\.kitDismiss) private var dismiss
-
-  var body: some View {
-    KitSheet(title: "Couldn’t Play the Video", systemImage: "exclamationmark.triangle", hue: .red) {
-      Text(message).kitFont(.body).fixedSize(horizontal: false, vertical: true)
-    } footer: {
-      Button("OK") { dismiss() }.buttonStyle(.kitPrimary).keyboardShortcut(.defaultAction)
-    }
-  }
-}

@@ -49,12 +49,8 @@ struct SubtitleStylePanel: View {
       }
       .buttonStyle(.kitPrimary)
     }
-    // The kit overlays' card (the panel ground, 20pt corners, a hairline and the float shadow), without the dim.
-    .clipShape(.rect(cornerRadius: KitMetrics.radiusOverlay, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: KitMetrics.radiusOverlay, style: .continuous).strokeBorder(.kitBorder, lineWidth: 0.5)
-    }
-    .kitSurface(.floating, cornerRadius: KitMetrics.radiusOverlay)
+    // The kit overlays' card, without the dim: the video keeps playing beside it.
+    .kitOverlayCard()
   }
 
   /// A labelled control: the label (and its value at the end) over the control, full width.

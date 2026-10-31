@@ -46,10 +46,7 @@ public struct PlayerApp: App {
   /// Updates from GitHub Releases (Player.zip, built by
   /// Tests/Scripts/release-macos.sh): checked daily once the user turns
   /// on automatic checks (never before), installed in place with a relaunch. App-lifetime.
-  private let updater = AppUpdater(github: "v57/Player", assetName: "Player.zip")
-
-  /// Player's red, the one colour the app picks.
-  static let accent = Color(red: 1, green: 0x3b / 255, blue: 0x30 / 255)
+  private let updater = AppUpdater(github: "v57/Player", assetName: "Player.zip", accent: .kitHubRed)
 
   public init() {
     // The platform's engine, with the SwiftData-backed store injected into its
@@ -93,7 +90,7 @@ public struct PlayerApp: App {
   public var body: some Scene {
     WindowGroup {
       ContentView().environmentObject(player).environmentObject(uiState)
-      .componentKit(accent: Self.accent)
+      .componentKit(accent: .kitHubRed)
       // Always dark, as AppDelegate keeps the Mac app (Linux has no app delegate).
       .preferredColorScheme(.dark)
       .task {

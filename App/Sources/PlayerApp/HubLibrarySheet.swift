@@ -54,7 +54,9 @@ private struct HubLibraryBrowser: View {
     let hosts = library.hosts
     KitSection("Devices", meta: hosts.isEmpty ? "none yet" : "\(hosts.count) on your Hub", systemImage: "point.3.connected.trianglepath.dotted", hue: .indigo) {
       if hosts.isEmpty {
-        Text("Add your Hub in the Vault app: its devices that offer SSH show up here.").kitFont(.caption).padding(8)
+        EmptyState(
+          systemImage: "point.3.connected.trianglepath.dotted", title: "No Devices",
+          message: "Add your Hub in the Vault app: its devices that offer SSH show up here.")
       }
       ForEach(hosts) { host in
         SidebarRow(host.displayName, subtitle: host.hostname, systemImage: "desktopcomputer", hue: .indigo)
@@ -72,7 +74,7 @@ private struct HubLibraryBrowser: View {
       systemImage: "folder", hue: .indigo, status: library.isLoading ? .working(progress: nil) : .idle
     ) {
       if library.entries.isEmpty, !library.isLoading {
-        Text("No folders or videos here.").kitFont(.caption).padding(8)
+        EmptyState(systemImage: "folder", title: "No Folders or Videos Here")
       }
       ScrollView {
         VStack(spacing: 0) {
