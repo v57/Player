@@ -5,7 +5,8 @@ import SwiftUI
 import VaultKit
 import VaultUI
 
-/// Open from Device: the Hub devices of one account (picked in the Devices header), then a device's folders and
+/// Open from Device: the Hub devices of one account (picked in the Devices header) and the Macs that let your devices
+/// in, then a device's folders and
 /// videos; picking a video plays it from there.
 struct HubLibrarySheet: View {
   /// The account whose devices the sheet shows, kept per window; Personal until another is picked.

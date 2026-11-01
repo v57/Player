@@ -4,7 +4,8 @@ import PlayerKit
 import SSHTunnel
 import VaultKit
 
-/// Another device's videos: an account's Hub devices (the hosts via Hub its vault keeps), browsed over SFTP and
+/// Another device's videos: an account's Hub devices (the hosts via Hub its vault keeps) and the Macs that let the
+/// user's devices in (Settings ▸ Remote), reached at whichever of their addresses answers, browsed over SFTP and
 /// played as they're read (`SFTPMediaSource`), signed in with this device's key (the Secure Enclave key every v57
 /// app shares) or the host's saved password. Nothing is copied to this Mac. A stream keeps the login it was opened
 /// with, so it stays on its account's host whatever the sheet shows next.
@@ -35,7 +36,7 @@ import VaultKit
 
   /// The devices to offer, by name.
   var hosts: [VaultHost] {
-    (demoHosts ?? vault.hubHosts)
+    (demoHosts ?? vault.otherDeviceHosts)
       .sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
   }
 
@@ -123,7 +124,7 @@ import VaultKit
     let client = try await SFTPClient.connect(server: server)
     // Trust on first use, as Shell and Database do; a Hub device's signed key is trusted ahead of time by Vault.
     if server.knownFingerprint == nil {
-      try? vault.store?.trust(fingerprint: client.hostKeyFingerprint, host: host.hostname, port: host.port)
+      try? vault.trustStore(for: host)?.trust(fingerprint: client.hostKeyFingerprint, host: host.hostname, port: host.port)
     }
     clients[host.id] = client
     return client
@@ -131,19 +132,22 @@ import VaultKit
 
   /// How Player logs in to the host: its user, this device's key or the saved password, the trusted host key.
   static func server(for host: VaultHost, in vault: Vault) throws -> SSHServer {
-    let known = try? vault.store?.knownFingerprint(host: host.hostname, port: host.port)
+    let known = try? vault.trustStore(for: host)?.knownFingerprint(host: host.hostname, port: host.port)
     let user = host.user.isEmpty ? NSUserName() : host.user
+    // The device's other addresses, tried when this one doesn't answer.
+    let fallbacks = vault.fallbackAddresses(of: host)
     if host.auth == .password {
       return SSHServer(
-        host: host.hostname, port: host.port, user: user, password: VaultSecrets.password(for: host.id),
-        knownFingerprint: known)
+        host: host.hostname, fallbackHosts: fallbacks, port: host.port, user: user,
+        password: VaultSecrets.password(for: host.id), knownFingerprint: known)
     }
     let key = try VaultIdentity.key()
     let blob = VaultIdentity.publicKeyBlob(key)
     let sshKey = SSHKey(kind: .ecdsaP256, publicKeyBlob: Array(blob), comment: VaultDevice.name) { data in
       Array(try VaultIdentity.sshSignature(Data(data), key: key))
     }
-    return SSHServer(host: host.hostname, port: host.port, user: user, key: sshKey, knownFingerprint: known)
+    return SSHServer(
+      host: host.hostname, fallbackHosts: fallbacks, port: host.port, user: user, key: sshKey, knownFingerprint: known)
   }
 }
 
