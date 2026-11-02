@@ -2,6 +2,7 @@ import ComponentKit
 import PlayerKit
 import SwiftUI
 import UpdateKit
+import VaultKit
 
 /// The app, all of it but its entry point (App/Sources/Player/PlayerMain.swift).
 public struct PlayerApp: App {
@@ -69,6 +70,8 @@ public struct PlayerApp: App {
     }
     _player = StateObject(wrappedValue: box)
     _uiState = StateObject(wrappedValue: PlayerUIState(player: box))
+    // The hosts Open from Device lists sync on their own, whichever v57 apps this Mac runs.
+    Vault.shared.startSync()
     #if os(macOS)
       // Trace first, then the input shield, so a blocked event is still logged.
       let trace = TestTrace()
