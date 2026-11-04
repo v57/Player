@@ -3,6 +3,7 @@ import Observation
 import PlayerKit
 import SSHTunnel
 import VaultKit
+import VaultUI
 
 /// Another device's videos: an account's Hub devices (the hosts via Hub its vault keeps) and the Macs that let the
 /// user's devices in (Settings ▸ Remote), reached at whichever of their addresses answers, browsed over SFTP and
@@ -122,24 +123,25 @@ import VaultKit
     if let client = clients[host.id], client.isAlive { return client }
     let server = try Self.server(for: host, in: vault)
     let client = try await SFTPClient.connect(server: server)
-    // Trust on first use, as Shell and Database do; a Hub device's signed key is trusted ahead of time by Vault.
-    if server.knownFingerprint == nil {
-      try? vault.trustStore(for: host)?.trust(fingerprint: client.hostKeyFingerprint, host: host.hostname, port: host.port)
-    }
     clients[host.id] = client
     return client
   }
 
-  /// How Player logs in to the host: its user, this device's key or the saved password, the trusted host key.
+  /// How Player logs in to the host: its user, this device's key or the saved password, and the trusted host key: one
+  /// a device signed or the user accepted, else the user is asked before anything is sent.
   static func server(for host: VaultHost, in vault: Vault) throws -> SSHServer {
-    let known = try? vault.trustStore(for: host)?.knownFingerprint(host: host.hostname, port: host.port)
+    let trust = SSHHostTrust.known(
+      vault.knownHost(for: host)?.fingerprint,
+      otherwise: .ask { key in
+        await VaultHostKeyRequest.shared.approve(key.fingerprint, keyType: key.type, for: host, in: vault)
+      })
     let user = host.user.isEmpty ? NSUserName() : host.user
     // The device's other addresses, tried when this one doesn't answer.
     let fallbacks = vault.fallbackAddresses(of: host)
     if host.auth == .password {
       return SSHServer(
         host: host.hostname, fallbackHosts: fallbacks, port: host.port, user: user,
-        password: VaultSecrets.password(for: host.id), knownFingerprint: known)
+        password: VaultSecrets.password(for: host.id), trust: trust)
     }
     let key = try VaultIdentity.key()
     let blob = VaultIdentity.publicKeyBlob(key)
@@ -147,7 +149,7 @@ import VaultKit
       Array(try VaultIdentity.sshSignature(Data(data), key: key))
     }
     return SSHServer(
-      host: host.hostname, fallbackHosts: fallbacks, port: host.port, user: user, key: sshKey, knownFingerprint: known)
+      host: host.hostname, fallbackHosts: fallbacks, port: host.port, user: user, key: sshKey, trust: trust)
   }
 }
 

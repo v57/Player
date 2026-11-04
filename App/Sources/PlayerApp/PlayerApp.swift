@@ -3,6 +3,7 @@ import PlayerKit
 import SwiftUI
 import UpdateKit
 import VaultKit
+import VaultUI
 
 /// The app, all of it but its entry point (App/Sources/Player/PlayerMain.swift).
 public struct PlayerApp: App {
@@ -93,6 +94,7 @@ public struct PlayerApp: App {
   public var body: some Scene {
     WindowGroup {
       ContentView().environment(player).environment(uiState)
+      .vaultHostKeyRequests()
       .componentKit(accent: .kitHubRed)
       // Always dark, as AppDelegate keeps the Mac app (Linux has no app delegate).
       .preferredColorScheme(.dark)
