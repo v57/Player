@@ -12,7 +12,10 @@ struct PlayerCommands: Commands {
     #if os(macOS)
       CommandGroup(replacing: .appInfo) { Button("About Player") { AboutPanel.show() } }
     #endif
-    CommandGroup(before: .newItem) {
+    // Replaces File > New Window (⌘N): a second window can't render the shared engine's video.
+    // Keep the items in this group: a later replacing group drops earlier before/after ones, and an
+    // empty one removes the whole File menu (seen on macOS 27).
+    CommandGroup(replacing: .newItem) {
       Button("Open…") { uiState.showFileImporter = true }.keyboardShortcut("o", modifiers: .command)
       Button("Open from Device…") { uiState.showHubLibrary = true }.keyboardShortcut("o", modifiers: [.command, .shift])
     }

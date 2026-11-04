@@ -137,9 +137,6 @@ public struct PlayerApp: App {
     .handlesExternalEvents(matching: ["*"]).commands {
       PlayerCommands(player: player, uiState: uiState)
       UpdaterCommands(updater: updater)
-      // WindowGroup also contributes File > New Window (Cmd+N), which
-      // would create the same unusable second window.
-      CommandGroup(replacing: .newItem) {}
     }
   }
 }
