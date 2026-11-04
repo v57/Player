@@ -472,6 +472,7 @@ import PlayerCDemux
   /// nothing can change except isPlaying (handled by state-change callbacks).
   private func refreshFromController() {
     let nowPlaying = controller.isPlaying
+    let wasPlaying = isPlaying
     if nowPlaying != isPlaying {
       isPlaying = nowPlaying
       updateDisplaySleepPrevention()
@@ -484,7 +485,8 @@ import PlayerCDemux
     {
       audioTrackID = active
     }
-    guard nowPlaying else { return }
+    // Once more as playback stops: a seek right before a pause has no later tick to show its target.
+    guard nowPlaying || wasPlaying else { return }
     let clock = controller.currentClockSafe()
     if clock >= 0 {
       let newPosition = duration > 0 ? min(clock, duration) : clock
