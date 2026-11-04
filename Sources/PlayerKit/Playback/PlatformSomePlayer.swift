@@ -1,43 +1,43 @@
-import Combine
 import Foundation
+import Observation
 import PlatformMedia
 
 /// The SomePlayer engine on PlatformMedia's player (AVFoundation on Apple platforms, GStreamer on Linux): the
 /// engine where the native one (FFmpeg + VideoToolbox + Metal) doesn't run. Same persistence as the native engine
 /// (resume points, remembered audio and subtitle picks, subtitles off unless picked); the audio modes, chapters,
 /// partial-download waits and `player-stream` sources are the native engine's alone.
-@MainActor public final class PlatformSomePlayer: SomePlayer {
+@MainActor @Observable public final class PlatformSomePlayer: SomePlayer {
   /// Resume points and track picks; the app injects its store.
-  public weak var store: (any PlayerPersistence)?
+  @ObservationIgnored public weak var store: (any PlayerPersistence)?
   /// The PlatformMedia player behind this engine (its picture: `PlatformVideoView`).
   public let player = PlatformPlayer()
 
-  @Published public private(set) var state: PlaybackState = .idle
-  @Published public private(set) var isPlaying = false
-  @Published public private(set) var fileName: String?
-  @Published public private(set) var position: Double = 0
-  @Published public private(set) var duration: Double = 0
-  @Published public private(set) var videoTracks: [MediaTrack] = []
-  @Published public private(set) var audioTracks: [MediaTrack] = []
-  @Published public private(set) var subtitleTracks: [MediaTrack] = []
-  @Published public private(set) var audioTrackID: Int?
-  @Published public private(set) var subtitleTrackID: Int?
-  @Published public private(set) var chapters: [PlayerChapter] = []
-  @Published public var errorMessage: String?
-  @Published public private(set) var isWaitingForFileUpdate = false
+  public private(set) var state: PlaybackState = .idle
+  public private(set) var isPlaying = false
+  public private(set) var fileName: String?
+  public private(set) var position: Double = 0
+  public private(set) var duration: Double = 0
+  public private(set) var videoTracks: [MediaTrack] = []
+  public private(set) var audioTracks: [MediaTrack] = []
+  public private(set) var subtitleTracks: [MediaTrack] = []
+  public private(set) var audioTrackID: Int?
+  public private(set) var subtitleTrackID: Int?
+  public private(set) var chapters: [PlayerChapter] = []
+  public var errorMessage: String?
+  public private(set) var isWaitingForFileUpdate = false
   /// Kept for the menus; this engine plays the audio as it is.
-  @Published public var enhancementMode: AudioEnhancementMode = .original
-  @Published public var normalizesLoudness = false
+  public var enhancementMode: AudioEnhancementMode = .original
+  public var normalizesLoudness = false
 
   public var currentTime: Double { position }
   public var volume: Double { player.volume * 100 }
   public var isMuted: Bool { player.isMuted }
 
-  private var currentFileURL: URL?
-  private var currentFilePath: String?
-  private var lastAutosave = Date.distantPast
+  @ObservationIgnored private var currentFileURL: URL?
+  @ObservationIgnored private var currentFilePath: String?
+  @ObservationIgnored private var lastAutosave = Date.distantPast
   /// The newest open: an older one that finishes later is dropped.
-  private var openToken: UInt64 = 0
+  @ObservationIgnored private var openToken: UInt64 = 0
 
   public init() {
     player.onEvent = { [weak self] event in self?.handle(event) }

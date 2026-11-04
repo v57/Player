@@ -6,12 +6,13 @@ import SwiftUI
 /// the video, which keeps playing. Every change shows on the video at once (a sample line while no cue is on
 /// screen); Apply keeps the style and closes the panel.
 struct SubtitleStylePanel: View {
-  @EnvironmentObject private var uiState: PlayerUIState
+  @Environment(PlayerUIState.self) private var uiState
 
   /// Shown on the video while the panel is open and no cue is: long enough to wrap at the narrow width.
   static let sample = "This is how subtitles look. A longer line like this one shows where they wrap."
 
   var body: some View {
+    @Bindable var uiState = uiState
     KitSheet(
       title: "Subtitle Style", meta: "Changes show on the video as you make them.", systemImage: "captions.bubble",
       hue: .indigo, width: 320

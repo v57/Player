@@ -11,12 +11,12 @@ public struct PlayerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
   #endif
 
-  /// The concrete SomePlayerBox wraps the native engine; views observe the
-  /// box (an existential cannot be an @EnvironmentObject — probed, see
-  /// SomePlayerBox). Wave 6 removed the libmpv engine entirely — native is
-  /// the only engine now (KANBAN).
-  @StateObject private var player: SomePlayerBox
-  @StateObject private var uiState: PlayerUIState
+  /// The concrete SomePlayerBox wraps the native engine; views read the box
+  /// (an existential can't go in the environment, see SomePlayerBox). Wave 6
+  /// removed the libmpv engine entirely — native is the only engine now
+  /// (KANBAN).
+  @State private var player: SomePlayerBox
+  @State private var uiState: PlayerUIState
 
   /// Routes the Play/Next/Previous media keys to the player and registers
   /// it as the macOS Now Playing app (so the keys stop falling through to
@@ -68,8 +68,8 @@ public struct PlayerApp: App {
       box.enhancementMode = effective
       box.normalizesLoudness = AudioEnhancementPreferences.normalizesLoudness
     }
-    _player = StateObject(wrappedValue: box)
-    _uiState = StateObject(wrappedValue: PlayerUIState(player: box))
+    _player = State(initialValue: box)
+    _uiState = State(initialValue: PlayerUIState(player: box))
     // The hosts Open from Device lists sync on their own, whichever v57 apps this Mac runs.
     Vault.shared.startSync()
     #if os(macOS)
@@ -92,7 +92,7 @@ public struct PlayerApp: App {
 
   public var body: some Scene {
     WindowGroup {
-      ContentView().environmentObject(player).environmentObject(uiState)
+      ContentView().environment(player).environment(uiState)
       .componentKit(accent: .kitHubRed)
       // Always dark, as AppDelegate keeps the Mac app (Linux has no app delegate).
       .preferredColorScheme(.dark)

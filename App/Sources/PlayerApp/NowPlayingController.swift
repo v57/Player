@@ -1,5 +1,5 @@
-import Combine
 import Foundation
+import Observation
 import PlatformMedia
 import PlayerKit
 
@@ -15,24 +15,14 @@ import PlayerKit
 /// through to Music (the system default) — the "keys just open Music" report.
 ///
 /// Created once in `PlayerApp` and held for the process lifetime; the box is
-/// held weakly and owned by the app's @StateObject.
+/// held weakly and owned by the app's @State.
 @MainActor final class NowPlayingController {
   private weak var player: SomePlayerBox?
-  private var cancellables: Set<AnyCancellable> = []
-
   private var nowPlaying: NowPlaying?
 
   init(player: SomePlayerBox) {
     self.player = player
     nowPlaying = NowPlaying(name: "Player") { [weak self] command in self?.handle(command) ?? false }
-    // Refresh Now Playing info whenever the player publishes a change.
-    // objectWillChange fires BEFORE the @Published value commits, so defer
-    // the read to the next main-actor hop to see fresh state. `position` is
-    // published ~5 Hz while playing, so elapsed time stays current.
-    player.objectWillChange.sink { [weak self] _ in
-      guard let self else { return }
-      Task { @MainActor in self.refreshNowPlaying() }
-    }.store(in: &cancellables)
     refreshNowPlaying()
   }
 
@@ -52,12 +42,18 @@ import PlayerKit
 
   // MARK: - Now Playing info
 
+  /// Sends what plays, and again whenever anything read here changes: `position` moves ~5 Hz while playing, so elapsed
+  /// time stays current. The change arrives before the new value is stored, so the next read waits for a main-actor hop.
   private func refreshNowPlaying() {
-    guard let player, let title = player.fileName else {
-      nowPlaying?.update(nil)
-      return
+    let item = withObservationTracking {
+      player.flatMap { player in
+        player.fileName.map {
+          NowPlaying.Item(title: $0, duration: player.duration, position: player.position, isPlaying: player.isPlaying)
+        }
+      }
+    } onChange: { [weak self] in
+      Task { @MainActor in self?.refreshNowPlaying() }
     }
-    nowPlaying?.update(
-      NowPlaying.Item(title: title, duration: player.duration, position: player.position, isPlaying: player.isPlaying))
+    nowPlaying?.update(item)
   }
 }

@@ -6,7 +6,7 @@
   /// with the subtitle style's sample line while the style is edited (the engine draws the subtitles themselves
   /// into the picture).
   public struct SomePlayerView: View {
-    @ObservedObject public var player: SomePlayerBox
+    public var player: SomePlayerBox
     var subtitleStyle: SubtitleStyle
     var subtitleSample: String?
 

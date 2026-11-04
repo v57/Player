@@ -4,8 +4,8 @@ import SwiftUI
 /// "Audio" and "Subtitles" menus in the app menu bar, listing the current
 /// file's tracks with a checkmark on the active one.
 struct PlayerCommands: Commands {
-  @ObservedObject var player: SomePlayerBox
-  @ObservedObject var uiState: PlayerUIState
+  let player: SomePlayerBox
+  let uiState: PlayerUIState
 
   var body: some Commands {
     // About panel with the MIT and FFmpeg LGPL credits.

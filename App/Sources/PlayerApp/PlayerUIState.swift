@@ -1,8 +1,8 @@
 #if os(macOS)
   import AppKit
 #endif
-import Combine
 import Foundation
+import Observation
 import PlayerKit
 import SwiftUI
 
@@ -17,19 +17,19 @@ import SwiftUI
 /// the window — the only mechanism that fires regardless of which first
 /// responder consumed the event. The cursor is hidden with
 /// NSCursor.setHiddenUntilMouseMoves (re-shows on the next mouse movement).
-@MainActor final class PlayerUIState: ObservableObject {
+@MainActor @Observable final class PlayerUIState {
   /// Drives the file importer sheet; also triggered by File > Open….
-  @Published var showFileImporter = false
+  var showFileImporter = false
   /// Open from Device: a video on one of the user's Hub devices.
-  @Published var showHubLibrary = false
+  var showHubLibrary = false
   /// Edit Style (Subtitles menu): the subtitle style panel at the window's right side.
-  @Published var showSubtitleStyle = false
+  var showSubtitleStyle = false
   /// How subtitles draw: what the user applied last, or the panel's edits while it's open.
-  @Published var subtitleStyle = SubtitleStylePreferences.style
+  var subtitleStyle = SubtitleStylePreferences.style
 
   /// True while the pointer is over the video area; reveals the controls
   /// overlay during playback.
-  @Published var hovering = false {
+  var hovering = false {
     didSet { if hovering != oldValue { applyWindowChrome() } }
   }
 
@@ -37,13 +37,13 @@ import SwiftUI
   /// actually playing; the overlay stays up on pause/stop (and when there's
   /// no file), so the controls can never get stuck off-screen. The window's
   /// title bar (traffic lights and toolbar) hides with them.
-  @Published var controlsHidden = false {
+  var controlsHidden = false {
     didSet { if controlsHidden != oldValue { applyWindowChrome() } }
   }
 
   /// True while the fullscreen idle timer has hidden the cursor (via
   /// NSCursor.setHiddenUntilMouseMoves; re-shows on the next mouse move).
-  @Published var cursorHidden = false
+  var cursorHidden = false
 
   /// How long (s) with no pointer/keyboard activity before the controls
   /// overlay (and, in fullscreen, the cursor) auto-hide while playing.
@@ -52,20 +52,20 @@ import SwiftUI
   /// The player box to ask about the playing state (weak — the box owns
   /// the engine; the UI state is a UI-layer observer only). Injected by
   /// the App before any window exists.
-  private weak var player: SomePlayerBox?
+  @ObservationIgnored private weak var player: SomePlayerBox?
 
   init(player: SomePlayerBox? = nil) { self.player = player }
 
-  private var idleTimer: Timer?
+  @ObservationIgnored private var idleTimer: Timer?
   private var isFullScreen = false
 
   #if os(macOS)
   /// Local event monitor: sees every event routed to this window (mouse,
   /// key, scroll), regardless of first responder — the only hook that can
   /// drive both the overlay hide and the fullscreen cursor hide together.
-  private var eventMonitor: Any?
+  @ObservationIgnored private var eventMonitor: Any?
   /// The player's window, for its title bar.
-  private weak var window: NSWindow?
+  @ObservationIgnored private weak var window: NSWindow?
 
   // MARK: - Window lifecycle (called from ContentView)
 
@@ -92,7 +92,7 @@ import SwiftUI
     transportKeyMonitors.append(keyMonitor)
   }
 
-  private var transportKeyMonitors: [Any?] = []
+  @ObservationIgnored private var transportKeyMonitors: [Any?] = []
 
   /// Routes transport keys that must work regardless of first responder.
   /// Returns nil (consumed) when handled, the event otherwise. Mirrors the
@@ -264,7 +264,8 @@ import SwiftUI
   }
 
   func showControls() {
-    controlsHidden = false
+    // Every mouse move lands here: only an actual change may touch the views.
+    if controlsHidden { controlsHidden = false }
     setCursorHidden(false)
   }
 

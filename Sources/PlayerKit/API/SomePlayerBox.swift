@@ -1,38 +1,20 @@
-import Combine
 import Foundation
 
-/// Concrete `ObservableObject` box around `any SomePlayer`.
+/// Concrete `Observable` box around `any SomePlayer`.
 ///
-/// `@EnvironmentObject var player: any SomePlayer` does not compile — an
-/// existential type cannot conform to `ObservableObject` (#ProtocolType
-/// NonConformance; probed with a swiftc -typecheck test before this file was
-/// written). This box is the documented fallback from KANBAN: it conforms to
-/// `SomePlayer` itself and forwards the whole surface 1:1 to the wrapped
-/// engine, re-emitting `objectWillChange` whenever the engine publishes.
-/// Views observe the box and never see an engine type.
+/// `@Environment((any SomePlayer).self)` doesn't compile: an existential type
+/// doesn't conform to `Observable`. This box conforms to `SomePlayer` itself and
+/// forwards the whole surface 1:1 to the wrapped engine. It has no state of its
+/// own: a view reading `player.position` reads the engine's `@Observable`
+/// property, so it's tracked per property, through the box. Views hold the box
+/// and never see an engine type.
 @MainActor public final class SomePlayerBox: SomePlayer {
-  /// Re-published to observers whenever the wrapped engine publishes a
-  /// change. Explicit (not synthesized) because the box stores no
-  /// @Published properties of its own. `nonisolated(unsafe)`: the
-  /// ObservableObject requirement is non-isolated, and the box is
-  /// @MainActor — a plain nonisolated let of the non-Sendable
-  /// ObservableObjectPublisher is a Swift 6 error. The publisher is only
-  /// ever touched from the main actor (the engine publishes on MainActor
-  /// and the sink below forwards there), so this is safe.
-  public nonisolated(unsafe) let objectWillChange = ObservableObjectPublisher()
-
   /// The engine behind this box. Views conditional-cast it when they need
   /// the engine's concrete surface (e.g. NativeVideoView -> NativeSomePlayer
   /// to register as the frame sink).
   public let engine: any SomePlayer
 
-  private var cancellables: Set<AnyCancellable> = []
-
-  public init(engine: any SomePlayer) {
-    self.engine = engine
-    engine.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(
-      in: &cancellables)
-  }
+  public init(engine: any SomePlayer) { self.engine = engine }
 
   // MARK: - SomePlayer forwarding
 

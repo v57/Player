@@ -1,4 +1,3 @@
-import Combine
 import ComponentKit
 import Foundation
 import PlayerKit
@@ -6,13 +5,14 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-  @EnvironmentObject private var player: SomePlayerBox
-  @EnvironmentObject private var uiState: PlayerUIState
+  @Environment(SomePlayerBox.self) private var player
+  @Environment(PlayerUIState.self) private var uiState
 
   /// True while a file drag hovers over the window; drives the drop
   /// affordance overlay.
   @State private var isDropTargeted = false
   var body: some View {
+    @Bindable var player = player
     ZStack {
       // Hidden while nothing is open: after a stop the Metal layer keeps the last frame it drew.
       // Edge to edge: under the title bar, which hides with the controls.
@@ -212,18 +212,28 @@ private struct WindowEvents: ViewModifier {
 
   func body(content: Content) -> some View {
     #if os(macOS)
-      content.onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
-        guard let window = note.object as? NSWindow else { return }
-        uiState.install(in: window)
-      }.onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { note in
-        guard let window = note.object as? NSWindow else { return }
-        if let appWindow = NSApp.keyWindow, appWindow === window { return }
-        uiState.removeEventMonitor()
-      }.onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in
-        // Edge-to-edge video under the title bar, which only appears on hover at the top of the screen.
-        uiState.fullScreenChanged(true)
-      }.onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
-        uiState.fullScreenChanged(false)
+      content.task {
+        // The window may have become key before this task started listening.
+        if let window = NSApp.keyWindow { uiState.install(in: window) }
+        for await note in NotificationCenter.default.notifications(named: NSWindow.didBecomeKeyNotification) {
+          guard let window = note.object as? NSWindow else { continue }
+          uiState.install(in: window)
+        }
+      }.task {
+        for await note in NotificationCenter.default.notifications(named: NSWindow.didResignKeyNotification) {
+          guard let window = note.object as? NSWindow else { continue }
+          if let appWindow = NSApp.keyWindow, appWindow === window { continue }
+          uiState.removeEventMonitor()
+        }
+      }.task {
+        for await _ in NotificationCenter.default.notifications(named: NSWindow.didEnterFullScreenNotification) {
+          // Edge-to-edge video under the title bar, which only appears on hover at the top of the screen.
+          uiState.fullScreenChanged(true)
+        }
+      }.task {
+        for await _ in NotificationCenter.default.notifications(named: NSWindow.didExitFullScreenNotification) {
+          uiState.fullScreenChanged(false)
+        }
       }
     #else
       // No window monitors here: pointer moves and transport keys reach the view.

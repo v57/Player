@@ -8,11 +8,12 @@ import SwiftUI
 /// registers it as the engine's VideoFrameSink. Presents CVPixelBuffers via
 /// CAMetalLayer + the YUV->RGB shader (KANBAN: player pushes, view consumes).
 ///
-/// The app passes its boxed player (the same object it injects as
-/// @EnvironmentObject); the view conditional-casts to the native engine to
-/// register the sink — mirroring the old app-side NativeVideoView.
+/// The app passes its boxed player (the same object it puts in the
+/// environment); the view conditional-casts to the native engine to register
+/// the sink — mirroring the old app-side NativeVideoView. It reads no observed
+/// state, so playback state changes don't update it.
 public struct SomePlayerView: NSViewRepresentable {
-  @ObservedObject public var player: SomePlayerBox
+  public var player: SomePlayerBox
   var subtitleStyle: SubtitleStyle
   var subtitleSample: String?
 

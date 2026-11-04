@@ -20,12 +20,12 @@ struct HubLibrarySheet: View {
 
 /// The sheet for one account's devices.
 private struct HubLibraryBrowser: View {
-  @EnvironmentObject private var player: SomePlayerBox
-  @StateObject private var library: HubLibrary
+  @Environment(SomePlayerBox.self) private var player
+  @State private var library: HubLibrary
   @Environment(\.kitDismiss) private var dismiss
 
   init(vault: Vault) {
-    _library = StateObject(wrappedValue: HubLibrary(vault: vault))
+    _library = State(initialValue: HubLibrary(vault: vault))
   }
 
   var body: some View {

@@ -1,5 +1,5 @@
-import Combine
 import Foundation
+import Observation
 import PlayerKit
 import SSHTunnel
 import VaultKit
@@ -9,23 +9,23 @@ import VaultKit
 /// played as they're read (`SFTPMediaSource`), signed in with this device's key (the Secure Enclave key every v57
 /// app shares) or the host's saved password. Nothing is copied to this Mac. A stream keeps the login it was opened
 /// with, so it stays on its account's host whatever the sheet shows next.
-@MainActor final class HubLibrary: ObservableObject {
+@MainActor @Observable final class HubLibrary {
   /// A folder on a device, being browsed.
   struct Place: Equatable {
     var hostID: String
     var path: String
   }
 
-  @Published private(set) var place: Place?
-  @Published private(set) var entries: [SFTPFileInfo] = []
-  @Published private(set) var isLoading = false
-  @Published var error: String?
+  private(set) var place: Place?
+  private(set) var entries: [SFTPFileInfo] = []
+  private(set) var isLoading = false
+  var error: String?
 
-  private var clients: [String: SFTPClient] = [:]
+  @ObservationIgnored private var clients: [String: SFTPClient] = [:]
   /// The stream playing now, unregistered when another opens.
-  private var playing: URL?
+  @ObservationIgnored private var playing: URL?
   /// The screenshots' devices, in place of the vault's (`--hub-library`).
-  private var demoHosts: [VaultHost]?
+  @ObservationIgnored private var demoHosts: [VaultHost]?
   /// The vault of the account whose devices are shown: their hosts, passwords' ids and known host keys.
   let vault: Vault
 

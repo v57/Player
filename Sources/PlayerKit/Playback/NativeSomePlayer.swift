@@ -1,47 +1,47 @@
 import AppKit
-import Combine
 import Foundation
+import Observation
 import PlayerCDemux
 
 /// The native engine behind the SomePlayer protocol: libavformat demux +
 /// VideoToolbox + libavcodec dca + AVAudioEngine + Metal (via VideoFrameSink).
 ///
-/// Owns a PlaybackController and mirrors its state onto the @Published
+/// Owns a PlaybackController and mirrors its state onto the observable
 /// surface the UI consumes. Persistence (resume + track picks) goes
 /// through PlaybackStore (one shared SwiftData container).
-@MainActor public final class NativeSomePlayer: SomePlayer {
+@MainActor @Observable public final class NativeSomePlayer: SomePlayer {
   static let shared = NativeSomePlayer()
 
   /// Persistence goes through the PlayerPersistence seam — the app
   /// injects its SwiftData-backed PlaybackStore; the library never
   /// touches SwiftData itself. Weak: the app owns the store.
-  public weak var store: (any PlayerPersistence)?
+  @ObservationIgnored public weak var store: (any PlayerPersistence)?
 
   private let controller = PlaybackController()
 
-  @Published public private(set) var isPlaying = false
-  @Published public private(set) var fileName: String?
-  @Published public private(set) var position: Double = 0
-  @Published public private(set) var duration: Double = 0
-  @Published public private(set) var videoTracks: [MediaTrack] = []
-  @Published public private(set) var audioTracks: [MediaTrack] = []
-  @Published public private(set) var subtitleTracks: [MediaTrack] = []
-  @Published public private(set) var audioTrackID: Int?
-  @Published public private(set) var subtitleTrackID: Int?
-  @Published public private(set) var chapters: [PlayerChapter] = []
-  @Published public var errorMessage: String?
+  public private(set) var isPlaying = false
+  public private(set) var fileName: String?
+  public private(set) var position: Double = 0
+  public private(set) var duration: Double = 0
+  public private(set) var videoTracks: [MediaTrack] = []
+  public private(set) var audioTracks: [MediaTrack] = []
+  public private(set) var subtitleTracks: [MediaTrack] = []
+  public private(set) var audioTrackID: Int?
+  public private(set) var subtitleTrackID: Int?
+  public private(set) var chapters: [PlayerChapter] = []
+  public var errorMessage: String?
 
   /// True while playback is paused because the file is still being
   /// downloaded (a downloader reserved space then writes it progressively).
   /// The demux hit a premature end; the engine is observing the file and
   /// will retry automatically when it is updated (throttled to once every
   /// 2 s). Drives the red "Waiting" badge in the top-leading corner.
-  @Published public private(set) var isWaitingForFileUpdate = false
+  public private(set) var isWaitingForFileUpdate = false
 
   /// Dialogue-enhancement mode. The app restores the saved value on launch;
   /// the setter routes to the controller (parameter-only while playing,
-  /// stashed until setup when idle). Published so menu UI updates live.
-  @Published public var enhancementMode: AudioEnhancementMode = .original {
+  /// stashed until setup when idle). Observed so menu UI updates live.
+  public var enhancementMode: AudioEnhancementMode = .original {
     didSet {
       guard enhancementMode != oldValue else { return }
       controller.setEnhancementMode(enhancementMode)
@@ -49,52 +49,52 @@ import PlayerCDemux
   }
 
   /// Loudness normalization; restored by the app like the mode.
-  @Published public var normalizesLoudness = false {
+  public var normalizesLoudness = false {
     didSet {
       guard normalizesLoudness != oldValue else { return }
       controller.setNormalizesLoudness(normalizesLoudness)
     }
   }
 
-  private var currentFilePath: String?
+  @ObservationIgnored private var currentFilePath: String?
   /// The URL whose sandbox file access we hold open (user-selected files
   /// delivered via fileImporter/Open With are security-scoped). Kept for
   /// the whole playback because the demuxer opens the fd on its own queue
   /// and reads it asynchronously; released on stop/error. No-op (returns
   /// false) outside the sandbox.
-  private var scopedURL: URL?
-  private var pendingResumePosition: Double?
-  private var pendingAudioPick: PlayerTrackPick?
-  private var pendingSubPick: PlayerTrackPick?
-  private var lastAutosave = Date.distantPast
-  private var positionTimer: Timer?
-  private var terminationObserver: NSObjectProtocol?
+  @ObservationIgnored private var scopedURL: URL?
+  @ObservationIgnored private var pendingResumePosition: Double?
+  @ObservationIgnored private var pendingAudioPick: PlayerTrackPick?
+  @ObservationIgnored private var pendingSubPick: PlayerTrackPick?
+  @ObservationIgnored private var lastAutosave = Date.distantPast
+  @ObservationIgnored private var positionTimer: Timer?
+  @ObservationIgnored private var terminationObserver: NSObjectProtocol?
 
   /// Held while media is actually playing to stop the OS from dimming the
   /// display / sleeping the system during playback (standard video-player
   /// behavior). Released on pause/stop/EOF; re-acquired on resume.
-  private var playbackActivity: NSObjectProtocol?
+  @ObservationIgnored private var playbackActivity: NSObjectProtocol?
 
   // MARK: - File-update wait (playing a still-downloading file)
 
   /// Position to resume from once the file has grown, while
   /// `isWaitingForFileUpdate` is true. Captured at the premature end.
-  private var waitingResumePosition: Double?
+  @ObservationIgnored private var waitingResumePosition: Double?
   /// 2 s repeating timer that stats the file and retries when it changes.
-  private var fileUpdateTimer: Timer?
+  @ObservationIgnored private var fileUpdateTimer: Timer?
   /// Last seen (size, mtime) of the file, so a tick only fires on a real
   /// update — the throttle (one retry per 2 s) the requirement asks for.
-  private var lastFileSignature: FileSignature?
+  @ObservationIgnored private var lastFileSignature: FileSignature?
   /// The URL being played/waited on, kept so a retry re-opens the same
   /// security-scoped file without losing the grant.
-  private var currentFileURL: URL?
+  @ObservationIgnored private var currentFileURL: URL?
 
   /// Identifies the newest open request. Opens are async and several can be
   /// in flight (Next pressed twice, a file-update retry racing a user open);
   /// a request that is no longer the newest when its probe returns is
   /// discarded instead of applying its file name, tracks and resume seek on
   /// top of the newer file.
-  private var openToken: UInt64 = 0
+  @ObservationIgnored private var openToken: UInt64 = 0
 
   /// Reported state machine. The controller drives the coarse states; the
   /// finer ones (buffering/seeking/ended) are derived here until the
@@ -279,7 +279,7 @@ import PlayerCDemux
 
   /// Single funnel for every seek (arrow-arrow, slider scrub, chapter skip,
   /// seekRelative). Submits to the controller AND, while paused, pushes the
-  /// target onto the published `position`: `refreshFromController` early-
+  /// target onto the observed `position`: `refreshFromController` early-
   /// returns when not playing and the position timer is stopped, so without
   /// this the UI timeline would freeze at the pre-seek value even though the
   /// engine seeked — a pause-time seek would appear to "not change the
@@ -357,7 +357,7 @@ import PlayerCDemux
 
   // MARK: - Track mapping (NativeTrackInfo -> MediaTrack)
 
-  /// `activeAudioID` is the stream the engine actually opened; the published
+  /// `activeAudioID` is the stream the engine actually opened; the visible
   /// selection starts from it (the selection used to carry over from the
   /// previous file and to name the default-flagged track even when the engine
   /// was playing a different one). Subtitles always start off.
@@ -466,12 +466,10 @@ import PlayerCDemux
 
   /// Pulls current clock/metrics from the controller (pipeline-safe getters).
   ///
-  /// Paused-CPU guard: @Published writes fire objectWillChange even when
-  /// the value is identical, and each one re-renders the SwiftUI tree
-  /// (TimelineBar, sliders, AttributeGraph diffing) — measured ~5-9% CPU
-  /// while PAUSED because the 5 Hz timer kept publishing the same frozen
-  /// position. Publish only actual changes; while paused nothing can
-  /// change except isPlaying (handled by state-change callbacks).
+  /// Paused-CPU guard: a 5 Hz timer writing the same frozen position while
+  /// PAUSED re-rendered its readers (TimelineBar, sliders, AttributeGraph
+  /// diffing): measured ~5-9% CPU. Write only actual changes; while paused
+  /// nothing can change except isPlaying (handled by state-change callbacks).
   private func refreshFromController() {
     let nowPlaying = controller.isPlaying
     if nowPlaying != isPlaying {
@@ -510,10 +508,7 @@ import PlayerCDemux
     } else {
       next = .ready
     }
-    if next != state {
-      objectWillChange.send()
-      state = next
-    }
+    if next != state { state = next }
   }
 
   /// Keeps the display awake (and the system from sleeping) while media is

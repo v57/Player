@@ -1,5 +1,5 @@
-import Combine
 import Foundation
+import Observation
 
 /// A chapter (plan section 22): a named time range in the media. App-owned;
 /// the engine fills it from the container's chapter metadata.
@@ -12,22 +12,16 @@ public struct PlayerChapter: Equatable, Sendable {
 /// No render surface, no engine handles, no FFmpeg types — pixel delivery
 /// stays engine-private (the native engine gets a VideoFrameSink).
 ///
-/// Class-bound and MainActor-isolated: every engine publishes its state with
-/// `@Published` and is driven from the main actor. `objectWillChange` is
-/// pinned to the concrete `ObservableObjectPublisher` (rather than the
-/// associated-type form) so the publisher can be forwarded through the
-/// existential — e.g. by `SomePlayerBox`.
+/// Class-bound and MainActor-isolated: every engine is `@Observable` and is
+/// driven from the main actor. Observation tracks each property on its own, so
+/// a view that doesn't read `position` isn't redrawn as it advances (~5 Hz
+/// while playing); read it in the smallest view that shows it.
 ///
-/// NOTE: views CANNOT hold this as `@EnvironmentObject var player: any
-/// SomePlayer` — an existential type cannot conform to `ObservableObject`
-/// (#ProtocolTypeNonConformance; probed with swiftc -typecheck). The app
-/// injects the concrete `SomePlayerBox` instead, which forwards this whole
-/// surface 1:1, so views never touch an engine type.
-@MainActor public protocol SomePlayer: ObservableObject, AnyObject {
-  /// Re-published on every engine state change. Pinned concrete type so
-  /// forwarding through `any SomePlayer` compiles.
-  var objectWillChange: ObservableObjectPublisher { get }
-
+/// NOTE: views can't hold this as `@Environment((any SomePlayer).self)`: an
+/// existential type doesn't conform to `Observable`. The app injects the
+/// concrete `SomePlayerBox` instead, which forwards this whole surface 1:1, so
+/// views never touch an engine type.
+@MainActor public protocol SomePlayer: Observable, AnyObject {
   // MARK: - State machine
 
   /// Current high-level playback state.
