@@ -145,7 +145,7 @@ import VaultUI
     }
     let key = try VaultIdentity.key()
     let blob = VaultIdentity.publicKeyBlob(key)
-    let sshKey = SSHKey(kind: .ecdsaP256, publicKeyBlob: Array(blob), comment: VaultDevice.name) { data in
+    let sshKey = SSHKey(kind: .ecdsaP256, publicKeyBlob: Array(blob), comment: VaultDevice.name, prepare: VaultIdentity.presencePrompt()) { data in
       Array(try VaultIdentity.sshSignature(Data(data), key: key))
     }
     return SSHServer(
