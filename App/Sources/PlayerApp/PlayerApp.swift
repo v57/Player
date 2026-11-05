@@ -140,5 +140,16 @@ public struct PlayerApp: App {
       PlayerCommands(player: player, uiState: uiState)
       UpdaterCommands(updater: updater)
     }
+    #if os(macOS)
+      Settings {
+        KitSettings(selection: .constant("Privacy"), window: .hiddenTitleBar) {
+          SettingsPane("Privacy", systemImage: "hand.raised", hue: .blue) { VaultICloudCard() }
+        }
+        .frame(width: 640, height: 360)
+        .componentKit(accent: .kitHubRed)
+        .preferredColorScheme(.dark)
+      }
+      .windowStyle(.hiddenTitleBar)
+    #endif
   }
 }
