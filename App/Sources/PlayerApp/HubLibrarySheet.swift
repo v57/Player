@@ -39,7 +39,7 @@ private struct HubLibraryBrowser: View {
         devices
       }
       if let error = library.error {
-        Banner("Couldn’t reach the device.", message: error, systemImage: "exclamationmark.triangle", hue: .red)
+        Banner("Couldn’t reach the device.", message: "\(error)", systemImage: "exclamationmark.triangle", hue: .red)
       }
     } footer: {
       if library.place != nil {
@@ -81,7 +81,8 @@ private struct HubLibraryBrowser: View {
         VStack(spacing: 0) {
           ForEach(library.entries, id: \.path) { entry in
             SidebarRow(
-              entry.name, subtitle: entry.isDirectory ? "Folder" : entry.size.formatted(.byteCount(style: .file)),
+              "\(entry.name)",
+              subtitle: entry.isDirectory ? "Folder" : "\(entry.size.formatted(.byteCount(style: .file)))",
               systemImage: entry.isDirectory ? "folder" : "film", hue: entry.isDirectory ? .gray : .indigo
             ).action { open(entry, in: place) }
           }
