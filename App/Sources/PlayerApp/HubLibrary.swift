@@ -7,8 +7,8 @@ import VaultUI
 
 /// Another device's videos: an account's Hub devices (the hosts via Hub its vault keeps) and the Macs that let the
 /// user's devices in (Settings ▸ Remote), reached at whichever of their addresses answers, browsed over SFTP and
-/// played as they're read (`SFTPMediaSource`), signed in with this device's key (the Secure Enclave key every v57
-/// app shares) or the host's saved password. Nothing is copied to this Mac. A stream keeps the login it was opened
+/// played as they're read (`SFTPMediaSource`), signed in with Player's own key, which the user allows on each Mac
+/// (security audit M4). Nothing is copied to this Mac. A stream keeps the login it was opened
 /// with, so it stays on its account's host whatever the sheet shows next.
 @MainActor @Observable final class HubLibrary {
   /// A folder on a device, being browsed.
@@ -127,7 +127,7 @@ import VaultUI
     return client
   }
 
-  /// How Player logs in to the host: its user, this device's key or the saved password, and the trusted host key: one
+  /// How Player logs in to the host: its user, its own key, and the trusted host key: one
   /// a device signed or the user accepted, else the user is asked before anything is sent.
   static func server(for host: VaultHost, in vault: Vault) throws -> SSHServer {
     let trust = SSHHostTrust.known(
@@ -138,11 +138,10 @@ import VaultUI
     let user = host.user.isEmpty ? NSUserName() : host.user
     // The device's other addresses, tried when this one doesn't answer.
     let fallbacks = vault.fallbackAddresses(of: host)
-    if host.auth == .password {
-      return SSHServer(
-        host: host.hostname, fallbackHosts: fallbacks, port: host.port, user: user,
-        password: VaultSecrets.password(for: host.id), trust: trust)
-    }
+    // Player holds no passwords and not the device's key (security audit M4): it signs in with a key of its own, which the
+    // user allows on each Mac in Vault ▸ Settings ▸ Remote. Publishing it is what lists it there.
+    guard host.auth != .password else { throw AppKeyLogin.passwordHost(host.displayName) }
+    Task { @MainActor in try? vault.store?.publishDeviceKey() }
     let key = try VaultIdentity.key()
     let blob = VaultIdentity.publicKeyBlob(key)
     let sshKey = SSHKey(kind: .ecdsaP256, publicKeyBlob: Array(blob), comment: VaultDevice.name, prepare: VaultIdentity.presencePrompt()) { data in
@@ -250,4 +249,16 @@ final class SFTPMediaSource: MediaByteSource, @unchecked Sendable {
   }
 
   private final class ResultBox: @unchecked Sendable { var value: Result<Data, Error>? }
+}
+
+/// Why Player can't sign in to a host.
+enum AppKeyLogin: LocalizedError {
+  case passwordHost(String)
+
+  var errorDescription: String? {
+    switch self {
+    case .passwordHost(let name):
+      "Player signs in with its own key, and “\(name)” takes a password. Allow Player on that Mac in Vault ▸ Settings ▸ Remote and set the host to sign in with a key."
+    }
+  }
 }
