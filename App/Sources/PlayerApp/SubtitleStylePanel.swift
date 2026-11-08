@@ -9,7 +9,7 @@ struct SubtitleStylePanel: View {
   @Environment(PlayerUIState.self) private var uiState
 
   /// Shown on the video while the panel is open and no cue is: long enough to wrap at the narrow width.
-  static let sample = "This is how subtitles look. A longer line like this one shows where they wrap."
+  static let sample = String(localized: "This is how subtitles look. A longer line like this one shows where they wrap.")
 
   var body: some View {
     @Bindable var uiState = uiState

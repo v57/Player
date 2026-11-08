@@ -10,9 +10,9 @@ public struct SubtitleStyle: Hashable, Sendable {
 
     public var title: String {
       switch self {
-      case .narrow: "Narrow"
-      case .medium: "Medium"
-      case .wide: "Wide"
+      case .narrow: String(localized: "Narrow")
+      case .medium: String(localized: "Medium")
+      case .wide: String(localized: "Wide")
       }
     }
 
@@ -31,9 +31,9 @@ public struct SubtitleStyle: Hashable, Sendable {
 
     public var title: String {
       switch self {
-      case .leading: "Left"
-      case .center: "Center"
-      case .trailing: "Right"
+      case .leading: String(localized: "Left")
+      case .center: String(localized: "Center")
+      case .trailing: String(localized: "Right")
       }
     }
 

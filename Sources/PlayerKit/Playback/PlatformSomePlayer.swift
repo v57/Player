@@ -50,7 +50,7 @@ import PlatformMedia
     let token = openToken
     saveCurrentPosition()
     guard url.scheme != MediaSources.scheme else {
-      errorMessage = "Playing from another device isn't supported on this system yet."
+      errorMessage = String(localized: "Playing from another device isn't supported on this system yet.")
       return
     }
     currentFileURL = url.standardizedFileURL
@@ -65,7 +65,7 @@ import PlatformMedia
     } catch {
       guard token == openToken else { return }
       state = .failed
-      errorMessage = "Could not open \(url.lastPathComponent): \(error.localizedDescription)"
+      errorMessage = String(localized: "Could not open \(url.lastPathComponent): \(error.localizedDescription)")
       return
     }
     guard token == openToken else { return }

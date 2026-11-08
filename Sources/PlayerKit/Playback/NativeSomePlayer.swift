@@ -272,7 +272,7 @@ import PlayerCDemux
       do {
         try await self?.openInternal(target, resumeOverride: nil)
       } catch {
-        self?.errorMessage = "Could not open \(target.lastPathComponent)."
+        self?.errorMessage = String(localized: "Could not open \(target.lastPathComponent).")
       }
     }
   }
@@ -327,7 +327,7 @@ import PlayerCDemux
   public func selectAudioTrack(_ id: Int) {
     guard let track = audioTracks.first(where: { $0.id == id }) else { return }
     guard track.isPlayable else {
-      errorMessage = "Unsupported audio codec: \(track.codec ?? "unknown")"
+      errorMessage = String(localized: "Unsupported audio codec: \(track.codec ?? "unknown")")
       return
     }
     audioTrackID = id
@@ -340,7 +340,7 @@ import PlayerCDemux
 
   public func selectSubtitleTrack(_ id: Int?) {
     if let id, let track = subtitleTracks.first(where: { $0.id == id }), !track.isPlayable {
-      errorMessage = "Unsupported subtitle format: \(track.codec ?? "unknown")"
+      errorMessage = String(localized: "Unsupported subtitle format: \(track.codec ?? "unknown")")
       return
     }
     subtitleTrackID = id
@@ -558,7 +558,7 @@ import PlayerCDemux
     // of the duration is always an incomplete download → wait regardless.
     if wasError, !fileIsRecentlyActive(currentFileURL?.path ?? currentFilePath ?? "") {
       state = .failed
-      errorMessage = "Playback was interrupted by a read error."
+      errorMessage = String(localized: "Playback was interrupted by a read error.")
       return
     }
     beginWaitingForFileUpdate(at: position)
@@ -651,13 +651,13 @@ import PlayerCDemux
 
   private func nativeErrorString(_ error: Error) -> String {
     switch error {
-    case NativePlayerError.unsupportedVideoCodec(let c): return "Unsupported video codec: \(c)"
-    case NativePlayerError.unsupportedAudioCodec(let c): return "Unsupported audio codec: \(c)"
-    case NativePlayerError.cannotOpen: return "Could not open the file."
-    case NativePlayerError.videoDecoderFailed: return "Video decoder failed to start."
-    case NativePlayerError.audioDecoderFailed: return "Audio decoder failed to start."
-    case NativePlayerError.outputDeviceFailed: return "Audio output device failed."
-    case NativePlayerError.seekFailed: return "Seek failed."
+    case NativePlayerError.unsupportedVideoCodec(let c): return String(localized: "Unsupported video codec: \(c)")
+    case NativePlayerError.unsupportedAudioCodec(let c): return String(localized: "Unsupported audio codec: \(c)")
+    case NativePlayerError.cannotOpen: return String(localized: "Could not open the file.")
+    case NativePlayerError.videoDecoderFailed: return String(localized: "Video decoder failed to start.")
+    case NativePlayerError.audioDecoderFailed: return String(localized: "Audio decoder failed to start.")
+    case NativePlayerError.outputDeviceFailed: return String(localized: "Audio output device failed.")
+    case NativePlayerError.seekFailed: return String(localized: "Seek failed.")
     default: return error.localizedDescription
     }
   }

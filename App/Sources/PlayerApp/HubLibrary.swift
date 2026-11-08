@@ -103,7 +103,7 @@ import VaultUI
     let nas = VaultHost(id: "demo-nas", name: "home-nas", hostname: "10.57.0.3", user: "maya")
     demoHosts = [VaultHost(id: "demo-pc", name: "gaming-pc", hostname: "10.57.0.4"), nas]
     guard page == "folder" else {
-      error = "Timed out connecting to 10.57.0.4 on port 22."
+      error = String(localized: "Timed out connecting to 10.57.0.4 on port 22.")
       return
     }
     let folder = "/home/maya/Movies"
