@@ -9,14 +9,15 @@ artwork or subtitles online. Player contacts these, and only for these reasons:
 |---|---|---|
 | Your other devices, over SSH | You use **Open from Device…** | A sign-in with Player's own key, the folders you browse and the video you play |
 | GitHub | You choose **Player ▸ Check for Updates…**, or daily if you turned on **Check for Updates Automatically** | Your IP address |
-| Apple's iCloud | While **Use iCloud** is on | Your vault's records (your devices and hosts), encrypted on this Mac first |
+| Apple's iCloud | While **Use iCloud** is on, from launch | Your vault's records, encrypted on this Mac first. Player reads your devices and hosts, and adds only its own key and the server keys you trust |
 
-**Check for Updates Automatically** is off when you install Player. An update downloads only when you say so.
+**Check for Updates Automatically** is off when you install Player. An update downloads only when you say so. The
+links in **About Player** open in your browser when you click them.
 
 ## Your videos stay where they are
 
-Player never changes, moves or deletes a video. It keeps only its own history on this Mac: where you stopped in each
-video, your track choices and your recent videos. Your audio mode, loudness and subtitle style are kept with Player's
+Player never changes, moves or deletes a video. It keeps only its own history on this Mac, never synced: where you
+stopped in each video, your track choices and your recent videos. Your audio mode, loudness and subtitle style are kept with Player's
 settings.
 
 ## Keys and passwords
