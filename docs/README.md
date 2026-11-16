@@ -28,8 +28,13 @@ while it's still downloading, and stream one from another of your devices with *
 - [Playback](Playback.md): the timeline, chapters, full screen, resume, media keys and videos still downloading.
 - [Audio and Subtitles](Audio-and-Subtitles.md): tracks, audio modes, loudness and subtitle style.
 - [Open from Device](Open-from-Device.md): play a video that's on another of your devices.
-- [Keyboard Shortcuts](Keyboard-Shortcuts.md)
+- [Settings](Settings.md): iCloud, and the choices Player keeps in its menus.
+- [Keyboard Shortcuts](Keyboard-Shortcuts.md): files, playback, the mouse and media keys.
 - [Privacy and Security](Privacy-and-Security.md): what Player sends over the network, keys and iCloud.
+
+## Libraries
+
+- [PlayerKit](PlayerKit.md): Player's engine, for apps that play video.
 
 ## Works with other v57 apps
 

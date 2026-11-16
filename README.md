@@ -34,7 +34,7 @@ Player > Check for Updates Automatically). Updates come from [UpdateKit](https:/
 
 ## Requirements
 
-macOS 14 or later on Apple silicon. The `PlayerKit` library supports macOS 12 or later.
+macOS 14 or later on Apple silicon. The `PlayerKit` library declares macOS 14 too.
 
 ## Build
 

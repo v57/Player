@@ -19,7 +19,7 @@ Choose a mode in the **Audio** menu, under **Mode**:
 - **Reduce Loud Sounds:** a night mode. Loud effects come down, quiet speech comes up, and there's less bass, so you
   can keep the volume low.
 
-Player remembers the mode for every video. No mode makes the sound clip.
+Player remembers the mode you chose and uses it for every video. No mode makes the sound clip.
 
 ## Even out loudness
 

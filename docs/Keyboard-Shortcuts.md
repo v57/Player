@@ -1,5 +1,7 @@
 # Keyboard Shortcuts
 
+<!-- platforms: macos -->
+
 Player's playback keys work wherever the focus is in its window.
 
 ## Files
