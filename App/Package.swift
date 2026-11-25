@@ -43,11 +43,11 @@ let package = Package(
       ])
   ])
 
-#if os(Linux)
-// The app on v57/SwiftUI's GTK backend (in App/: V57_LOCAL=1 swift build --product Player; SwiftUI's
-// Linux/scripts/build-app stages it). The frameworks the app imports (SwiftData, SQLite3, Combine) are v57/SwiftUI's
-// stand-ins. Only here: on Apple platforms v57/SwiftUI (with its swift-syntax) stays out of the package graph Xcode
-// resolves.
+#if os(Linux) || os(Windows)
+// The app on v57/SwiftUI: GTK on Linux (in App/: V57_LOCAL=1 swift build --product Player; SwiftUI's
+// Linux/scripts/build-app stages it), WinUI on Windows. The frameworks the app imports (SwiftData, SQLite3, Combine)
+// are v57/SwiftUI's stand-ins. Only here: on Apple platforms v57/SwiftUI (with its swift-syntax) stays out of the
+// package graph Xcode resolves.
 package.dependencies += [v57("SwiftUI")]
 let appSettings: [SwiftSetting] = [
   .swiftLanguageMode(.v5), .defaultIsolation(MainActor.self), .enableUpcomingFeature("ApproachableConcurrency"),
@@ -64,9 +64,19 @@ for target in package.targets where target.name == "PlayerApp" {
   target.swiftSettings = appSettings
 }
 // The entry point, Sources/Player/PlayerMain.swift, which the Xcode project builds on macOS.
+#if os(Windows)
+// The app: a DLL the SwiftUI WinUI host loads (SwiftUI's Windows/scripts/build-app.ps1 -PackagePath <this App folder>
+// -Product PlayerWinUI).
+package.targets.append(
+  .target(
+    name: "Player", dependencies: ["PlayerApp", .product(name: "SwiftUI", package: "SwiftUI")],
+    swiftSettings: appSettings))
+package.products.append(.library(name: "PlayerWinUI", type: .dynamic, targets: ["Player"]))
+#else
 package.targets.append(
   .executableTarget(
     name: "Player", dependencies: ["PlayerApp", .product(name: "SwiftUI", package: "SwiftUI")],
     swiftSettings: appSettings))
 package.products.append(.executable(name: "Player", targets: ["Player"]))
+#endif
 #endif

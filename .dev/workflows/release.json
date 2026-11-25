@@ -56,6 +56,15 @@
       "runner" : "mac"
     },
     {
+      "id" : "archive-windows",
+      "kind" : "release",
+      "name" : "Archive · Windows (arm64, x64)",
+      "parallel" : false,
+      "platform" : "windows",
+      "releaseStep" : "archive",
+      "runner" : "vm:Windows"
+    },
+    {
       "id" : "archive-linux",
       "kind" : "release",
       "name" : "Archive · Linux",

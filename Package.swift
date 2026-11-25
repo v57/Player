@@ -54,8 +54,8 @@ let package = Package(
       ], ),
   ], cLanguageStandard: .gnu17)
 
-#if os(Linux)
-// Linux: PlayerKit plays through PlatformMedia (GStreamer) instead of the native engine (FFmpeg dylibs built for
+#if os(Linux) || os(Windows)
+// Linux and Windows: PlayerKit plays through PlatformMedia (GStreamer, Media Foundation) instead of the native engine (FFmpeg dylibs built for
 // macOS, VideoToolbox, Metal, AVAudioEngine). The app is its own package in App/.
 package.dependencies += [v57("SwiftUI")]
 package.targets.removeAll { $0.name == "PlayerCDemux" || $0.name == "PlayerKitTests" }
